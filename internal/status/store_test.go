@@ -272,3 +272,40 @@ func TestLegacyStateFile(t *testing.T) {
 		t.Errorf("legacy sessions = %+v", list)
 	}
 }
+
+// A question asked in the desktop app's closing box keeps the session waiting
+// after Stop, through the idle reminder, until the next prompt.
+func TestStoreQuestionAtTurnEnd(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	feed := func(i int, body string) {
+		ev, err := ParseClaude("pc1", []byte(body), t0.Add(time.Duration(i)*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Apply(ev)
+	}
+	state := func() (State, string) {
+		l := s.List(t0.Add(time.Hour))
+		return l[0].State, l[0].Detail
+	}
+
+	feed(0, `{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"napraw"}`)
+	feed(1, `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"mcp__ccd_turn__wrap_up","tool_input":{"recap":"r","ask":"Naprawić teraz?"}}`)
+	if st, _ := state(); st != StateWorking {
+		t.Fatalf("before Stop: %q", st)
+	}
+	feed(2, `{"session_id":"s1","hook_event_name":"Stop","last_assistant_message":"Znalazłem błąd."}`)
+	if st, d := state(); st != StateWaiting || d != "decyzja: Naprawić teraz?" {
+		t.Fatalf("after Stop: %q %q", st, d)
+	}
+	feed(3, `{"session_id":"s1","hook_event_name":"Notification","notification_type":"idle_prompt"}`)
+	if st, _ := state(); st != StateWaiting {
+		t.Fatalf("after idle reminder: %q", st)
+	}
+	feed(4, `{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"tak"}`)
+	feed(5, `{"session_id":"s1","hook_event_name":"Stop","last_assistant_message":"Gotowe."}`)
+	if st, d := state(); st != StateIdle || d != "Gotowe." {
+		t.Fatalf("next turn: %q %q", st, d)
+	}
+}

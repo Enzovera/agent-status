@@ -71,6 +71,15 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		ev.State = StateWorking
 		ev.Detail = toolDetail(p.ToolName, p.ToolInput)
 		ev.Tool = clip(p.ToolName)
+		if q, ask := userQuestion(p.ToolName, p.ToolInput); q != "" {
+			if ask {
+				// Asked in the closing box: the turn goes on until Stop.
+				ev.Ask = q
+			} else {
+				ev.State = StateWaiting
+				ev.Detail = q
+			}
+		}
 	case "PermissionRequest":
 		ev.State = StateWaiting
 		ev.Detail = "zgoda: " + toolDetail(p.ToolName, p.ToolInput)
@@ -82,11 +91,13 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 			ev.Detail = clip(p.Message)
 		case "idle_prompt":
 			ev.State = StateIdle
+			ev.KeepWaiting = true
 		}
 	case "Stop":
 		ev.State = StateIdle
 		ev.Detail = clip(p.LastAssistantMessage)
 		ev.Message = clipLong(p.LastAssistantMessage)
+		ev.EndsTurn = true
 	case "StopFailure":
 		ev.State = StateError
 		ev.Detail = clip(p.Message)
@@ -95,6 +106,37 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		ev.State = StateEnded
 	}
 	return ev, nil
+}
+
+// userQuestion recognizes Claude Code tools that stop and wait for the user.
+// It returns what the user is asked; deferred is true when the question is
+// only shown once the turn ends (the desktop app's closing box), so the
+// session keeps working until Stop.
+func userQuestion(tool string, raw json.RawMessage) (q string, deferred bool) {
+	var in struct {
+		Questions []struct {
+			Question string `json:"question"`
+		} `json:"questions"`
+		Ask        string `json:"ask"`
+		Initiation string `json:"initiation"`
+		Title      string `json:"title"`
+	}
+	_ = json.Unmarshal(raw, &in)
+	switch {
+	case tool == "AskUserQuestion":
+		q := "pytanie"
+		if len(in.Questions) > 0 && in.Questions[0].Question != "" {
+			q += ": " + in.Questions[0].Question
+		}
+		return clip(q), false
+	case tool == "ExitPlanMode":
+		return "plan do akceptacji", false
+	case strings.HasSuffix(tool, "__wrap_up") && strings.TrimSpace(in.Ask) != "":
+		return clip("decyzja: " + in.Ask), true
+	case strings.HasSuffix(tool, "__start_session") && in.Initiation == "offer":
+		return clip(strings.TrimSpace("propozycja sesji: " + in.Title)), false
+	}
+	return "", false
 }
 
 func toolDetail(name string, raw json.RawMessage) string {

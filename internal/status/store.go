@@ -45,6 +45,14 @@ type Event struct {
 	Model      string
 	Mode       string // permission mode
 	Permission bool   // the agent asked for a permission
+
+	// Ask is a question the agent will show the user when its turn ends;
+	// the event that ends the turn (EndsTurn) then means "waiting", not "idle".
+	Ask      string
+	EndsTurn bool
+	// KeepWaiting: the State is only a reminder that the agent is idle and
+	// must not hide that it still waits for an answer.
+	KeepWaiting bool
 }
 
 // HistoryEntry is one meaningful event in a session's recent past.
@@ -78,6 +86,8 @@ type Session struct {
 	ToolCalls   int            `json:"toolCalls"`
 	Permissions int            `json:"permissions"`
 	Tools       map[string]int `json:"tools,omitempty"`
+	// PendingAsk is the question to show once the current turn ends.
+	PendingAsk string `json:"pendingAsk,omitempty"`
 	History     []HistoryEntry `json:"history,omitempty"`
 	// Timeline holds only state changes, kept much longer than History, so the
 	// page can draw what a session was doing over the last hours.
@@ -223,6 +233,21 @@ func (s *Store) Apply(ev Event) {
 	}
 	if ev.Task != "" {
 		sess.Task = ev.Task
+	}
+	if ev.Prompt != "" || ev.State == StateEnded {
+		sess.PendingAsk = ""
+	}
+	if ev.Ask != "" {
+		sess.PendingAsk = ev.Ask
+	}
+	if ev.EndsTurn && sess.PendingAsk != "" {
+		ev.State = StateWaiting
+		ev.Detail = sess.PendingAsk
+		sess.PendingAsk = ""
+	}
+	if ev.KeepWaiting && sess.State == StateWaiting {
+		ev.State = ""
+		ev.Detail = ""
 	}
 	if ev.State != "" {
 		sess.State = ev.State
