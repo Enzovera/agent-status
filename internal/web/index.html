@@ -5,27 +5,32 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agenci</title>
 <style>
+  /* Swimlanes: each session is a row with its recent states drawn on a strip; "now" is the right edge.
+     Grouped by machine, by project, or as a queue ordered by what the session needs from you. */
   :root {
-    --bg: #f6f5f2; --panel: #ffffff; --line: #d9d6cf; --text: #17161a; --muted: #6d6a73;
-    --signal: #d92d20; --warn: #b7791f; --ok: #2f6f4e;
+    --bg: #f2f3f1; --panel: #fbfbfa; --line: #d6d8d3; --grid: #e6e8e3; --text: #1a1c19; --muted: #686d66;
+    --signal: #d0401f; --signal-soft: #fbe7e1; --ok: #3c8a5a; --warn: #b07405; --warn-soft: #f8efdc;
+    --idle: #c4c8c1; --ended: #e0e2dd;
+    --sans: "Archivo", "Segoe UI", system-ui, sans-serif;
+    --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #121214; --panel: #1a1a1d; --line: #2e2e33; --text: #ecebe8; --muted: #94919a;
-      --signal: #ff5a4a; --warn: #e0a640; --ok: #6cbf8f;
+      --bg: #131513; --panel: #1a1c1a; --line: #2e322e; --grid: #242724; --text: #e8eae6; --muted: #959b93;
+      --signal: #ff7552; --signal-soft: #33201b; --ok: #5dbb83; --warn: #e3a63c; --warn-soft: #2c2414;
+      --idle: #454a44; --ended: #2a2d2a;
       color-scheme: dark;
     }
   }
   * { box-sizing: border-box; border-radius: 0; }
   body {
     margin: 0; padding: 16px; background: var(--bg); color: var(--text);
-    font: 15px/1.4 "Archivo", "Segoe UI", system-ui, sans-serif;
-    font-variant-numeric: tabular-nums;
+    font: 14px/1.45 var(--sans); font-variant-numeric: tabular-nums;
   }
-  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; margin-bottom: 16px; }
   h1 { font-size: 20px; margin: 0; font-weight: 700; }
-  .bar { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
+  .bar { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; justify-content: flex-end; }
   .group { display: inline-flex; border: 1px solid var(--line); }
   .group button {
     font: inherit; font-size: 13px; padding: 4px 10px; min-height: 32px; border: 0; cursor: pointer;
@@ -33,49 +38,82 @@
   }
   .group button + button { border-left: 1px solid var(--line); }
   .group button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+  .group button:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
   .summary { color: var(--muted); font-size: 13px; }
   .summary b { color: var(--text); }
   .summary b.signal { color: var(--signal); }
-  .hosts { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: -4px 0 14px; }
+  .legend i { display: inline-block; width: 14px; height: 8px; margin-right: 6px; }
+
+  .hosts { display: grid; gap: 16px; }
   section { border: 1px solid var(--line); background: var(--panel); }
+  .lanes, .head { display: grid; grid-template-columns: minmax(150px, 240px) minmax(0, 1fr) 104px; gap: 4px 16px; align-items: center; }
   section h2 {
-    margin: 0; padding: 10px 12px; font-size: 13px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: .04em; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between;
+    margin: 0; padding: 8px 14px; font-size: 13px; font-weight: 700;
+    border-bottom: 1px solid var(--line); background: var(--bg);
   }
-  section h2 span { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
-  .row { padding: 10px 12px; border-bottom: 1px solid var(--line); min-height: 44px; }
+  section h2 .name { text-transform: uppercase; letter-spacing: .04em; }
+  section h2 small { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 8px; font-size: 12px; }
+  section.q-waiting h2 .name { color: var(--signal); }
+  section.q-check h2 .name { color: var(--warn); }
+  .ticks { position: relative; height: 14px; font: 11px/14px var(--mono); color: var(--muted); font-weight: 400; }
+  .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .ticks span.first { transform: none; }
+  .ticks span.last { transform: translateX(-100%); color: var(--text); }
+
+  .row { border-bottom: 1px solid var(--grid); }
   .row:last-child { border-bottom: 0; }
-  .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
-  .project { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .agent { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 6px; }
-  .state { font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .head { padding: 10px 14px; cursor: pointer; }
+  .head:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+  .head:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+  .row.waiting { background: var(--signal-soft); }
+  .row.error, .row.stale { background: var(--warn-soft); }
+  .row.ended { opacity: .6; }
+  .row.open { opacity: 1; }
+  .who { min-width: 0; }
+  .who b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .who b::before { content: "▸"; display: inline-block; width: 14px; color: var(--muted); font-weight: 400; }
+  .row.open .who b::before { content: "▾"; }
+  .who span { display: block; padding-left: 14px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trk { min-width: 0; display: grid; gap: 4px; }
+  .strip {
+    position: relative; height: 14px; overflow: hidden;
+    background: repeating-linear-gradient(to left, var(--grid) 0 1px, transparent 1px calc(100% / var(--n, 6)));
+  }
+  .strip i { position: absolute; top: 0; bottom: 0; }
+  .s-working { background: var(--ok); }
+  .s-waiting { background: var(--signal); }
+  .s-error { background: var(--warn); }
+  .s-idle { background: var(--idle); }
+  .s-ended { background: var(--ended); }
+  .s-stale { background: repeating-linear-gradient(135deg, var(--warn) 0 3px, transparent 3px 7px); }
+  .strip .now { right: 0; width: 2px; background: var(--text); }
+  .cap { min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cap .detail { font: 12px var(--mono); color: var(--muted); margin-left: 10px; }
+  .cap .detail:first-child { margin-left: 0; }
+  .row.waiting .cap { white-space: normal; overflow-wrap: anywhere; }
+  .row.waiting .cap .detail { display: block; margin: 2px 0 0; font: 600 14px/1.35 var(--sans); color: var(--signal); }
+  .row.open .cap { white-space: normal; overflow-wrap: anywhere; }
+  .state { text-align: right; font-size: 13px; font-weight: 600; line-height: 1.25; white-space: nowrap; }
+  .state small { display: block; font: 11px var(--mono); color: var(--muted); font-weight: 400; }
   .state.waiting { color: var(--signal); }
   .state.error, .state.stale { color: var(--warn); }
   .state.working { color: var(--ok); }
   .state.idle, .state.ended { color: var(--muted); font-weight: 400; }
-  .task, .detail { font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .detail { color: var(--muted); }
-  .row.ended { opacity: .55; }
-  .row.open { opacity: 1; }
-  .head { cursor: pointer; margin: -10px -12px; padding: 10px 12px; }
-  .head:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
-  .head:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
-  .head .project::before { content: "▸"; display: inline-block; width: 14px; color: var(--muted); font-weight: 400; }
-  .row.open .head .project::before { content: "▾"; }
-  .row.open .task, .row.open .detail { white-space: normal; overflow-wrap: anywhere; }
-  .info { margin: 20px 0 0; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 13px; }
+
+  .info { margin: 0 14px; padding: 10px 0 14px 14px; border-top: 1px dashed var(--line); font-size: 13px; }
   .info dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; }
   .info dt { color: var(--muted); }
   .info dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
-  .info code { font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  .info code { font: 12px/1.4 var(--mono); }
   .info h3 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 4px; }
-  .text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 6px 8px; background: var(--bg); border-left: 2px solid var(--line); }
+  .text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 6px 8px; background: var(--bg); border-left: 2px solid var(--line); max-width: 90ch; }
   .tools { display: flex; flex-wrap: wrap; gap: 4px; }
-  .tools span { border: 1px solid var(--line); padding: 1px 6px; }
+  .tools span { border: 1px solid var(--line); padding: 1px 6px; background: var(--panel); }
   .tools b { font-weight: 600; margin-left: 4px; }
   .history { list-style: none; margin: 0; padding: 0; }
   .history li { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 2px 0; }
-  .history time { color: var(--muted); }
+  .history time { color: var(--muted); font-family: var(--mono); font-size: 12px; }
   .history .msg { overflow-wrap: anywhere; min-width: 0; }
   .history .st { font-weight: 600; margin-right: 6px; }
   .history .st.waiting { color: var(--signal); }
@@ -91,15 +129,32 @@
   .actions button:hover { border-color: var(--signal); }
   .empty, .offline { color: var(--muted); padding: 24px 0; }
   .offline { color: var(--warn); }
+
+  @media (max-width: 700px) {
+    .lanes { grid-template-columns: minmax(0, 1fr); }
+    .lanes > .ticks { grid-row: 2; }
+    .lanes > :last-child { display: none; }
+    .head { grid-template-columns: minmax(0, 1fr) auto; }
+    .head .trk { grid-column: 1 / -1; grid-row: 2; }
+    .info { margin: 0 14px; padding-left: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
 <header>
   <h1>Agenci</h1>
   <div class="bar">
-    <div class="group" role="group" aria-label="Grupuj według">
-      <button type="button" data-group="host">maszyna</button>
-      <button type="button" data-group="project">projekt</button>
+    <div class="group" role="group" aria-label="Układ listy">
+      <button type="button" data-group="host" title="Sesje pogrupowane według maszyny">maszyna</button>
+      <button type="button" data-group="project" title="Sesje pogrupowane według projektu">projekt</button>
+      <button type="button" data-group="queue" title="Najpierw sesje, które czekają na Ciebie">kolejka</button>
+    </div>
+    <div class="group" role="group" aria-label="Zakres osi czasu">
+      <button type="button" data-range="15m">15 min</button>
+      <button type="button" data-range="1h">1 h</button>
+      <button type="button" data-range="4h">4 h</button>
+      <button type="button" data-range="12h">12 h</button>
     </div>
     <div class="group" role="group" aria-label="Zakończone sesje">
       <button type="button" id="show-ended" title="Pokaż albo ukryj zakończone sesje">zakończone</button>
@@ -108,11 +163,36 @@
     <div class="summary" id="summary"></div>
   </div>
 </header>
+<div class="legend" aria-hidden="true">
+  <span><i class="s-waiting"></i>czeka na Ciebie</span>
+  <span><i class="s-working"></i>pracuje</span>
+  <span><i class="s-error"></i>błąd</span>
+  <span><i class="s-stale"></i>brak sygnału</span>
+  <span><i class="s-idle"></i>gotowy</span>
+</div>
 <div id="offline" class="offline" hidden>Brak połączenia z serwerem</div>
+<div id="late" class="offline" hidden></div>
 <div id="hosts" class="hosts"></div>
 <script>
-const LABEL = { waiting: "czeka na Ciebie", working: "pracuje", error: "błąd", idle: "gotowy", ended: "zakończona" };
+const LABEL = { waiting: "czeka na Ciebie", working: "pracuje", error: "błąd", idle: "gotowy", ended: "zakończona", stale: "brak sygnału" };
+const SHORT = { waiting: "czeka", working: "pracuje", error: "błąd", idle: "gotowy", ended: "zakończona", stale: "brak sygnału" };
 const AGENT = { claude: "Claude Code", opencode: "OpenCode" };
+const MIN = 60e3, HOUR = 60 * MIN;
+// Window width and grid step of the strips.
+const RANGES = {
+  "15m": { ms: 15 * MIN, step: 5 * MIN },
+  "1h": { ms: HOUR, step: 10 * MIN },
+  "4h": { ms: 4 * HOUR, step: HOUR },
+  "12h": { ms: 12 * HOUR, step: 2 * HOUR },
+};
+// Queue lanes, most urgent first.
+const LANES = [
+  { id: "waiting", title: "Czeka na Ciebie", has: s => s.state === "waiting" },
+  { id: "check", title: "Do sprawdzenia", has: s => s.state === "error" || s.stale },
+  { id: "working", title: "Pracuje", has: s => s.state === "working" && !s.stale },
+  { id: "idle", title: "Gotowe", has: s => s.state === "idle" },
+  { id: "ended", title: "Zakończone", has: s => s.state === "ended" },
+];
 
 function ago(iso, now) {
   const s = Math.max(0, Math.round((now - new Date(iso)) / 1000));
@@ -131,7 +211,7 @@ function el(tag, cls, text) {
 const NO_PROJECT = "bez projektu";
 
 let groupBy = "host";
-try { if (localStorage.getItem("groupBy") === "project") groupBy = "project"; } catch {}
+try { const g = localStorage.getItem("groupBy"); if (g === "project" || g === "queue") groupBy = g; } catch {}
 
 function setGroup(g) {
   groupBy = g;
@@ -140,6 +220,17 @@ function setGroup(g) {
   paint();
 }
 for (const b of document.querySelectorAll("[data-group]")) b.addEventListener("click", () => setGroup(b.dataset.group));
+
+let range = "1h";
+try { const r = localStorage.getItem("range"); if (RANGES[r]) range = r; } catch {}
+
+function setRange(r) {
+  range = r;
+  try { localStorage.setItem("range", r); } catch {}
+  for (const b of document.querySelectorAll("[data-range]")) b.setAttribute("aria-pressed", String(b.dataset.range === r));
+  paint();
+}
+for (const b of document.querySelectorAll("[data-range]")) b.addEventListener("click", () => setRange(b.dataset.range));
 
 const MODE = { default: "domyślny", plan: "planowanie", acceptEdits: "akceptuje edycje", bypassPermissions: "bez pytań", dontAsk: "bez pytań", auto: "auto" };
 const expanded = new Set();   // keys of sessions whose details are open
@@ -152,6 +243,7 @@ function toggle(key) {
 }
 
 const clock = iso => new Date(iso).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const hm = t => new Date(t).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
 const sameDay = (a, b) => a.toDateString() === b.toDateString();
 function when(iso, now) {
   const d = new Date(iso);
@@ -226,6 +318,66 @@ function plural(n, one, few, many) {
   return d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
 }
 
+// State spans of a session as [from, to, state] in epoch ms; to = null means "until now".
+// Older servers send no timeline, so fall back to the state changes in the short history.
+function spans(s) {
+  let tl = s.timeline && s.timeline.length ? s.timeline
+    : (s.history || []).filter(h => h.state).map(h => ({ at: h.at, state: h.state }));
+  const out = [];
+  for (let i = 0; i < tl.length; i++) {
+    const from = Date.parse(tl[i].at);
+    const to = i + 1 < tl.length ? Date.parse(tl[i + 1].at) : null;
+    const st = tl[i].state;
+    if (st === "ended") continue;   // the strip simply stops where the session ended
+    if (to === null && s.stale) {
+      // Working, but silent: solid up to the last signal, hatched after it.
+      const last = Date.parse(s.updatedAt);
+      out.push([from, last, st], [last, null, "stale"]);
+    } else {
+      out.push([from, to, st]);
+    }
+  }
+  return out;
+}
+
+// Positions a span on the strip for the current window; hides it when outside.
+function place(i, now) {
+  const win = RANGES[range].ms, start = now - win;
+  const a = Math.max(+i.dataset.a, start);
+  const b = i.dataset.b ? Math.min(+i.dataset.b, now) : now;
+  if (b <= a) { i.hidden = true; return; }
+  i.hidden = false;
+  i.style.left = (100 * (a - start) / win) + "%";
+  i.style.width = (100 * (b - a) / win) + "%";
+}
+
+function strip(s, now) {
+  const box = el("div", "strip");
+  for (const [a, b, st] of spans(s)) {
+    const i = el("i", "s-" + st);
+    i.dataset.a = a;
+    i.dataset.b = b == null ? "" : b;
+    i.title = (LABEL[st] || st) + " · " + hm(a) + "–" + (b == null ? "teraz" : hm(b));
+    place(i, now);
+    box.append(i);
+  }
+  box.append(el("i", "now"));
+  return box;
+}
+
+function ticks() {
+  const { ms, step } = RANGES[range];
+  const box = el("div", "ticks");
+  box.setAttribute("aria-hidden", "true");
+  for (let t = ms; t >= 0; t -= step) {
+    const label = t === 0 ? "teraz" : "−" + (t >= HOUR ? t / HOUR + " h" : t / MIN + " min");
+    const sp = el("span", t === ms ? "first" : t === 0 ? "last" : null, label);
+    sp.style.left = (100 * (ms - t) / ms) + "%";
+    box.append(sp);
+  }
+  return box;
+}
+
 let showEnded = true;
 try { showEnded = localStorage.getItem("showEnded") !== "0"; } catch {}
 
@@ -254,66 +406,94 @@ document.getElementById("clear-ended").addEventListener("click", () => {
   }
 });
 
+function row(s, now) {
+  const isOpen = expanded.has(s.key);
+  const cls = s.stale ? "stale" : s.state;
+  const r = el("div", "row " + cls + (isOpen ? " open" : ""));
+  const head = el("div", "head");
+  head.tabIndex = 0;
+  head.setAttribute("role", "button");
+  head.setAttribute("aria-expanded", String(isOpen));
+  head.dataset.key = s.key;
+  if (!isOpen) head.title = "Kliknij, aby zobaczyć szczegóły";
+
+  const agent = AGENT[s.agent] || s.agent;
+  const name = s.project || s.sessionId.slice(0, 8);
+  const [title, sub] = groupBy === "project" ? [s.host, agent]
+    : groupBy === "queue" ? [name, s.host + " · " + agent]
+    : [name, agent];
+  const who = el("div", "who");
+  who.append(el("b", null, title), el("span", null, sub));
+
+  const trk = el("div", "trk");
+  trk.append(strip(s, now));
+  if (s.task || s.detail) {
+    const cap = el("div", "cap");
+    if (s.task) cap.append(el("span", "task", s.task));
+    if (s.detail) cap.append(el("span", "detail", s.detail));
+    trk.append(cap);
+  }
+
+  const st = el("div", "state " + cls, SHORT[cls] || cls);
+  st.title = LABEL[cls] || cls;
+  const age = el("small", null, ago(s.updatedAt, now) + " temu");
+  age.dataset.at = s.updatedAt;   // ticked in place by paint() between data changes
+  st.append(age);
+
+  head.append(who, trk, st);
+  r.append(head);
+  if (isOpen) r.append(details(s, new Date(now)));
+  return r;
+}
+
+function section(name, count, list, now, cls) {
+  const sec = el("section", cls);
+  const h = el("h2", "lanes");
+  const n = el("span", "name", name);
+  n.append(el("small", null, count));
+  h.append(n, ticks(), el("span"));
+  sec.append(h);
+  // Fixed order (newest session first) so rows don't swap places whenever an agent reports.
+  for (const s of [...list].sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.key.localeCompare(b.key))) {
+    sec.append(row(s, now));
+  }
+  return sec;
+}
+
 function render(data) {
   if (!showEnded) data = { ...data, sessions: data.sessions.filter(s => s.state !== "ended") };
-  const now = new Date(data.now);
-  const byProject = groupBy === "project";
-  // Sessions arrive sorted by urgency; grouping keeps that order inside each group.
-  const groups = new Map();
-  for (const s of data.sessions) {
-    const k = byProject ? (s.project || NO_PROJECT) : s.host;
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(s);
-  }
+  const now = new Date(data.now).getTime();
   const hosts = document.getElementById("hosts");
   hosts.replaceChildren();
+  hosts.style.setProperty("--n", RANGES[range].ms / RANGES[range].step);
   if (data.sessions.length === 0) {
     hosts.append(el("div", "empty", "Brak sesji"));
   }
-  // Alphabetical, so sections don't jump around on every refresh; "bez projektu" goes last.
-  const order = ([a], [b]) => (a === NO_PROJECT) - (b === NO_PROJECT) || a.localeCompare(b);
-  for (const [key, list] of [...groups].sort(byProject ? order : (a, b) => a[0].localeCompare(b[0]))) {
-    const sec = el("section");
-    const h = el("h2", null, key);
-    h.append(el("span", null, list.filter(s => s.state !== "ended").length + " aktywne"));
-    sec.append(h);
-    // Fixed order (newest session first) so rows don't swap places whenever an agent reports;
-    // urgency is already shown by colour and in the summary.
-    for (const s of [...list].sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.key.localeCompare(b.key))) {
-      const isOpen = expanded.has(s.key);
-      const row = el("div", "row " + s.state + (isOpen ? " open" : ""));
-      const head = el("div", "head");
-      head.tabIndex = 0;
-      head.setAttribute("role", "button");
-      head.setAttribute("aria-expanded", String(isOpen));
-      head.dataset.key = s.key;
-      const top = el("div", "top");
-      const title = byProject ? s.host : (s.project || s.sessionId.slice(0, 8));
-      const name = el("div", "project", title);
-      name.append(el("span", "agent", AGENT[s.agent] || s.agent));
-      const cls = s.stale ? "stale" : s.state;
-      const label = s.stale ? "brak sygnału" : LABEL[s.state] || s.state;
-      const st = el("div", "state " + cls, label + " · " + ago(s.updatedAt, now));
-      st.dataset.at = s.updatedAt;   // ticked in place by paint() between data changes
-      st.dataset.label = label;
-      top.append(name, st);
-      head.append(top);
-      if (s.task) head.append(el("div", "task", s.task));
-      if (s.detail) head.append(el("div", "detail", s.detail));
-      if (!isOpen) head.title = "Kliknij, aby zobaczyć szczegóły";
-      row.append(head);
-      if (isOpen) row.append(details(s, now));
-      sec.append(row);
+  if (groupBy === "queue") {
+    for (const lane of LANES) {
+      const list = data.sessions.filter(lane.has);
+      if (list.length) hosts.append(section(lane.title, String(list.length), list, now, "q-" + lane.id));
     }
-    hosts.append(sec);
+  } else {
+    const byProject = groupBy === "project";
+    const groups = new Map();
+    for (const s of data.sessions) {
+      const k = byProject ? (s.project || NO_PROJECT) : s.host;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(s);
+    }
+    // Alphabetical, so sections don't jump around on every refresh; "bez projektu" goes last.
+    const order = ([a], [b]) => (a === NO_PROJECT) - (b === NO_PROJECT) || a.localeCompare(b);
+    for (const [key, list] of [...groups].sort(order)) {
+      hosts.append(section(key, list.filter(s => s.state !== "ended").length + " aktywne", list, now));
+    }
   }
   const waiting = data.sessions.filter(s => s.state === "waiting").length;
   const working = data.sessions.filter(s => s.state === "working").length;
   const summary = document.getElementById("summary");
   summary.replaceChildren();
   const w = el("b", waiting ? "signal" : null, String(waiting));
-  summary.append(w, " czeka · ", el("b", null, String(working)), " pracuje · ", el("span", null));
-  summary.lastChild.id = "refreshed";
+  summary.append(w, " czeka · ", el("b", null, String(working)), " pracuje");
   document.title = waiting ? `(${waiting}) Agenci` : "Agenci";
 }
 
@@ -333,12 +513,13 @@ function paint() {
   // Shift the server's "now" by the time elapsed since the fetch, so ages stay live between polls.
   const elapsed = Date.now() - lastFetch;
   const now = new Date(new Date(lastData.now).getTime() + elapsed);
-  const sig = JSON.stringify([lastData.sessions, groupBy, showEnded, [...expanded]]);
+  const sig = JSON.stringify([lastData.sessions, groupBy, range, showEnded, [...expanded]]);
   const sel = window.getSelection();
-  // Re-rendering would drop a text selection (e.g. copying a path), so wait until it's gone.
-  // Only real text counts (a double-click on a row selects just "\n"), and only for a while,
-  // so a forgotten selection can't freeze the list.
-  const selecting = sel && sel.toString().trim() !== "" && hostsEl.contains(sel.anchorNode) &&
+  // Re-rendering would drop a text selection, so it waits while someone copies text from the
+  // open details (paths, prompts). A stray selection in a row (double-click) never blocks it,
+  // and any selection only holds it for a while, so the list can't freeze.
+  const anchor = sel && sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement);
+  const selecting = sel && sel.toString().trim() !== "" && anchor && anchor.closest("#hosts .info") &&
     Date.now() - selectedAt < 15000;
   if (sig !== lastSig && !selecting) {
     const focusedKey = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.key : null;
@@ -349,13 +530,18 @@ function paint() {
       if (again) again.focus({ preventScroll: true });
     }
   } else {
-    // Nothing changed: only tick the ages, leaving the DOM (hover, focus, selection) alone.
-    for (const e of hostsEl.querySelectorAll(".state[data-at]")) {
-      e.textContent = e.dataset.label + " · " + ago(e.dataset.at, now);
+    // Nothing changed: only tick the ages and slide the strips, leaving the DOM (hover, focus, selection) alone.
+    for (const e of hostsEl.querySelectorAll("[data-at]")) {
+      e.textContent = ago(e.dataset.at, now) + " temu";
     }
+    for (const i of hostsEl.querySelectorAll(".strip i[data-a]")) place(i, now.getTime());
   }
+  // No ticking "refreshed N s ago" in the header (it shifted the layout every second);
+  // speak up only when data is actually old.
   const s = Math.round(elapsed / 1000);
-  document.getElementById("refreshed").textContent = s < 2 ? "odświeżono teraz" : "odświeżono " + s + " s temu";
+  const late = document.getElementById("late");
+  late.hidden = s < 10 || !document.getElementById("offline").hidden;
+  late.textContent = "Dane sprzed " + s + " s — serwer nie odpowiada";
 }
 
 async function tick() {
@@ -384,7 +570,7 @@ async function tick() {
 document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 window.addEventListener("focus", tick);
 window.addEventListener("online", tick);
-// One delegated listener: rows are rebuilt every second.
+// One delegated listener: rows are rebuilt whenever the data changes.
 const hostsRoot = document.getElementById("hosts");
 hostsRoot.addEventListener("click", e => {
   const rm = e.target.closest("[data-remove]");
@@ -407,6 +593,7 @@ hostsRoot.addEventListener("keydown", e => {
 });
 setInterval(paint, 1000);
 setGroup(groupBy);
+setRange(range);
 setShowEnded(showEnded);
 tick();
 </script>

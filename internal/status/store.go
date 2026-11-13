@@ -78,6 +78,15 @@ type Session struct {
 	Permissions int            `json:"permissions"`
 	Tools       map[string]int `json:"tools,omitempty"`
 	History     []HistoryEntry `json:"history,omitempty"`
+	// Timeline holds only state changes, kept much longer than History, so the
+	// page can draw what a session was doing over the last hours.
+	Timeline []StateChange `json:"timeline,omitempty"`
+}
+
+// StateChange marks the moment a session entered a state.
+type StateChange struct {
+	At    time.Time `json:"at"`
+	State State     `json:"state"`
 }
 
 // clone copies the session deeply enough to be read outside the store lock.
@@ -85,6 +94,7 @@ func (s *Session) clone() Session {
 	c := *s
 	c.Tools = maps.Clone(s.Tools)
 	c.History = append([]HistoryEntry(nil), s.History...)
+	c.Timeline = append([]StateChange(nil), s.Timeline...)
 	return c
 }
 
@@ -93,6 +103,8 @@ const (
 	keepEndedFor  = 2 * time.Hour
 	keepSilentFor = 24 * time.Hour
 	historyLen    = 30
+	timelineFor   = 24 * time.Hour
+	timelineLen   = 2000
 )
 
 type Store struct {
@@ -187,6 +199,7 @@ func (s *Store) Apply(ev Event) {
 		sess.Permissions++
 	}
 	sess.addHistory(ev)
+	sess.addTimeline(ev.At)
 	sess.LastEvent = ev.Kind
 	sess.UpdatedAt = ev.At
 	s.dirty = true
@@ -209,6 +222,25 @@ func (s *Session) addHistory(ev Event) {
 	s.History = append(s.History, e)
 	if over := len(s.History) - historyLen; over > 0 {
 		s.History = append([]HistoryEntry(nil), s.History[over:]...)
+	}
+}
+
+// addTimeline records the current state if it differs from the last recorded
+// one. Entries older than timelineFor are dropped, except the newest of them,
+// which still says what state the session was in when the window starts.
+func (s *Session) addTimeline(at time.Time) {
+	if n := len(s.Timeline); n == 0 || s.Timeline[n-1].State != s.State {
+		s.Timeline = append(s.Timeline, StateChange{At: at, State: s.State})
+	}
+	cut := 0
+	for cut+1 < len(s.Timeline) && at.Sub(s.Timeline[cut+1].At) > timelineFor {
+		cut++
+	}
+	if over := len(s.Timeline) - timelineLen; over > cut {
+		cut = over
+	}
+	if cut > 0 {
+		s.Timeline = append([]StateChange(nil), s.Timeline[cut:]...)
 	}
 }
 

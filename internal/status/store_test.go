@@ -198,3 +198,33 @@ func TestStoreIdleShowsLastReply(t *testing.T) {
 		t.Errorf("own detail should win, got %q", d)
 	}
 }
+
+func TestStoreTimeline(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	ev := func(at time.Duration, st State, detail string) {
+		s.Apply(Event{Agent: "claude", Host: "pc", SessionID: "a", Kind: "k", State: st, Detail: detail, At: t0.Add(at)})
+	}
+	ev(0, "", "")                           // first event has no state: the session starts idle
+	ev(time.Minute, StateWorking, "Read")   // change
+	ev(2*time.Minute, StateWorking, "Bash") // same state: no new entry
+	ev(3*time.Minute, StateWaiting, "zgoda")
+	ev(4*time.Minute, "", "") // heartbeat
+	got := s.List(t0.Add(5 * time.Minute))[0].Timeline
+	want := []StateChange{{t0, StateIdle}, {t0.Add(time.Minute), StateWorking}, {t0.Add(3 * time.Minute), StateWaiting}}
+	if len(got) != len(want) {
+		t.Fatalf("timeline = %+v", got)
+	}
+	for i := range want {
+		if !got[i].At.Equal(want[i].At) || got[i].State != want[i].State {
+			t.Errorf("timeline[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	// A day later the old entries go, but the last one before the cutoff stays.
+	ev(30*time.Hour, StateIdle, "")
+	got = s.List(t0.Add(30 * time.Hour))[0].Timeline
+	if len(got) != 2 || got[0].State != StateWaiting || got[1].State != StateIdle {
+		t.Errorf("pruned timeline = %+v", got)
+	}
+}
