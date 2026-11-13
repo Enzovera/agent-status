@@ -82,6 +82,12 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		}
 	case "PermissionRequest":
 		ev.State = StateWaiting
+		// Claude Code asks for "permission" to show a question too; that is
+		// the question, not a permission.
+		if q, _ := userQuestion(p.ToolName, p.ToolInput); q != "" {
+			ev.Detail = q
+			break
+		}
 		ev.Detail = "zgoda: " + toolDetail(p.ToolName, p.ToolInput)
 		ev.Permission = true
 	case "Notification":
@@ -89,6 +95,9 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		case "permission_prompt", "agent_needs_input", "elicitation_dialog", "elicitation_url_dialog":
 			ev.State = StateWaiting
 			ev.Detail = clip(p.Message)
+			// The generic message ("Claude needs your permission…") must not
+			// replace what PermissionRequest or a question already said.
+			ev.KeepWaiting = true
 		case "idle_prompt":
 			ev.State = StateIdle
 			ev.KeepWaiting = true

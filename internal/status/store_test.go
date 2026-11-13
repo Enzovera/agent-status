@@ -309,3 +309,38 @@ func TestStoreQuestionAtTurnEnd(t *testing.T) {
 		t.Fatalf("next turn: %q %q", st, d)
 	}
 }
+
+// Recorded from Claude Code: a question also fires PermissionRequest and a
+// permission_prompt notification. The page keeps showing the question.
+func TestStoreQuestionNotPermission(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	for i, body := range []string{
+		`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Którą bazę?"}]}}`,
+		`{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Którą bazę?"}]}}`,
+		`{"session_id":"s1","hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission to use AskUserQuestion"}`,
+		`{"session_id":"s2","hook_event_name":"PermissionRequest","tool_name":"Edit","tool_input":{"file_path":"/a/b.go"}}`,
+		`{"session_id":"s2","hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission to use Edit"}`,
+		`{"session_id":"s3","hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission to use Bash"}`,
+	} {
+		ev, err := ParseClaude("pc1", []byte(body), t0.Add(time.Duration(i)*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Apply(ev)
+	}
+	want := map[string]struct {
+		detail string
+		perms  int
+	}{
+		"s1": {"pytanie: Którą bazę?", 0},
+		"s2": {"zgoda: Edit: /a/b.go", 1},
+		"s3": {"Claude needs your permission to use Bash", 0},
+	}
+	for _, sess := range s.List(t0.Add(time.Minute)) {
+		w := want[sess.SessionID]
+		if sess.State != StateWaiting || sess.Detail != w.detail || sess.Permissions != w.perms {
+			t.Errorf("%s: state=%q detail=%q permissions=%d, want waiting %q %d", sess.SessionID, sess.State, sess.Detail, sess.Permissions, w.detail, w.perms)
+		}
+	}
+}

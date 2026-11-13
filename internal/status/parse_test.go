@@ -24,6 +24,7 @@ func TestParseClaude(t *testing.T) {
 		{"plan", `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"x"}}`, StateWaiting, "", "plan do akceptacji"},
 		{"session offer", `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"mcp__ccd_session__start_session","tool_input":{"initiation":"offer","title":"Fix CI"}}`, StateWaiting, "", "propozycja sesji: Fix CI"},
 		{"wrap up without ask", `{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"mcp__ccd_turn__wrap_up","tool_input":{"recap":"done"}}`, StateWorking, "", "mcp__ccd_turn__wrap_up"},
+		{"question permission", `{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Którą bazę?"}]}}`, StateWaiting, "", "pytanie: Którą bazę?"},
 		{"permission", `{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"Edit","tool_input":{"file_path":"/a/b.go"}}`, StateWaiting, "", "zgoda: Edit: /a/b.go"},
 		{"permission prompt", `{"session_id":"s1","hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs permission"}`, StateWaiting, "", "Claude needs permission"},
 		{"idle prompt", `{"session_id":"s1","hook_event_name":"Notification","notification_type":"idle_prompt","message":"waiting"}`, StateIdle, "", ""},

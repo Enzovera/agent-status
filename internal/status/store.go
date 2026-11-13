@@ -50,8 +50,8 @@ type Event struct {
 	// the event that ends the turn (EndsTurn) then means "waiting", not "idle".
 	Ask      string
 	EndsTurn bool
-	// KeepWaiting: the State is only a reminder that the agent is idle and
-	// must not hide that it still waits for an answer.
+	// KeepWaiting: the event is only a reminder (a notification) and must not
+	// change a session that already waits for the user.
 	KeepWaiting bool
 }
 
