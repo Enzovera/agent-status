@@ -98,15 +98,19 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 }
 
 func toolDetail(name string, raw json.RawMessage) string {
+	// Claude Code uses snake_case keys, OpenCode camelCase.
 	var in struct {
 		Description string `json:"description"`
 		FilePath    string `json:"file_path"`
+		FilePathCC  string `json:"filePath"`
+		Path        string `json:"path"`
 		Pattern     string `json:"pattern"`
 		URL         string `json:"url"`
 		Command     string `json:"command"`
+		Query       string `json:"query"`
 	}
 	_ = json.Unmarshal(raw, &in)
-	for _, s := range []string{in.Description, in.FilePath, in.Pattern, in.URL, in.Command} {
+	for _, s := range []string{in.Description, in.FilePath, in.FilePathCC, in.Path, in.Pattern, in.URL, in.Command, in.Query} {
 		if s != "" {
 			return clip(name + ": " + s)
 		}
@@ -115,30 +119,78 @@ func toolDetail(name string, raw json.RawMessage) string {
 }
 
 type openCodePayload struct {
-	Host       string          `json:"host"`
-	Directory  string          `json:"directory"`
-	Type       string          `json:"type"`
-	Properties json.RawMessage `json:"properties"`
+	Host      string          `json:"host"`
+	Directory string          `json:"directory"`
+	Type      string          `json:"type"`
+	Data      json.RawMessage `json:"data"`
 }
 
-type openCodeProps struct {
+type openCodeError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+func (e openCodeError) text() string { return firstNonEmpty(e.Message, e.Type) }
+
+type openCodeModel struct {
+	ID         string `json:"id"`
+	ProviderID string `json:"providerID"`
+	Variant    string `json:"variant"`
+}
+
+func (m *openCodeModel) name() string {
+	if m == nil || m.ID == "" {
+		return ""
+	}
+	s := m.ID
+	if m.ProviderID != "" {
+		s = m.ProviderID + "/" + s
+	}
+	if m.Variant != "" {
+		s += " (" + m.Variant + ")"
+	}
+	return s
+}
+
+// openCodeData is the union of the "data" fields of the OpenCode 2.x events
+// the plugin forwards.
+type openCodeData struct {
 	SessionID string `json:"sessionID"`
-	Status    struct {
-		Type string `json:"type"`
-	} `json:"status"`
-	Info struct {
-		ID        string `json:"id"`
-		Title     string `json:"title"`
+	Location  struct {
 		Directory string `json:"directory"`
-	} `json:"info"`
-	Title      string `json:"title"`
-	Permission string `json:"permission"`
-	Error      struct {
-		Name string `json:"name"`
-		Data struct {
-			Message string `json:"message"`
-		} `json:"data"`
-	} `json:"error"`
+	} `json:"location"`
+	Title  string         `json:"title"`
+	Model  *openCodeModel `json:"model"`
+	Status struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"status"`
+	Item struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Text string `json:"text"`
+		} `json:"payload"`
+	} `json:"item"`
+	Error   openCodeError   `json:"error"`
+	Reason  string          `json:"reason"`
+	Name    string          `json:"name"`
+	Input   json.RawMessage `json:"input"`
+	Text    string          `json:"text"`
+	Action  string          `json:"action"`
+	Res     []string        `json:"resources"`
+	Message string          `json:"message"`
+	Reply   string          `json:"reply"`
+	Form    struct {
+		SessionID string `json:"sessionID"`
+		Title     string `json:"title"`
+	} `json:"form"`
+}
+
+var interruptReason = map[string]string{
+	"user":       "przerwane przez Ciebie",
+	"shutdown":   "przerwane: zamknięcie OpenCode",
+	"superseded": "przerwane: nowe polecenie",
+	"inactivity": "przerwane: brak aktywności",
 }
 
 // ParseOpenCode maps an event forwarded by the OpenCode plugin to an Event.
@@ -148,10 +200,10 @@ func ParseOpenCode(fallbackHost string, body []byte, at time.Time) (Event, error
 	if err := json.Unmarshal(body, &p); err != nil {
 		return Event{}, fmt.Errorf("opencode payload: %w", err)
 	}
-	var props openCodeProps
-	if len(p.Properties) > 0 {
-		if err := json.Unmarshal(p.Properties, &props); err != nil {
-			return Event{}, fmt.Errorf("opencode properties: %w", err)
+	var d openCodeData
+	if len(p.Data) > 0 {
+		if err := json.Unmarshal(p.Data, &d); err != nil {
+			return Event{}, fmt.Errorf("opencode data: %w", err)
 		}
 	}
 	host := p.Host
@@ -161,46 +213,70 @@ func ParseOpenCode(fallbackHost string, body []byte, at time.Time) (Event, error
 	ev := Event{
 		Agent:     "opencode",
 		Host:      host,
-		SessionID: props.SessionID,
-		Cwd:       p.Directory,
+		SessionID: firstNonEmpty(d.SessionID, d.Form.SessionID),
+		Cwd:       firstNonEmpty(d.Location.Directory, p.Directory),
 		Kind:      p.Type,
 		At:        at,
+		Model:     clip(d.Model.name()),
 	}
-	if ev.SessionID == "" {
-		ev.SessionID = props.Info.ID
-	}
-	if props.Info.Directory != "" {
-		ev.Cwd = props.Info.Directory
-	}
-	ev.Task = clip(props.Info.Title)
 
-	switch {
-	case p.Type == "session.created":
+	switch p.Type {
+	case "session.created":
 		ev.State = StateIdle
-	case p.Type == "session.status":
-		switch props.Status.Type {
+		ev.Task = clip(d.Title)
+	case "session.renamed":
+		ev.Task = clip(d.Title)
+	case "session.deleted":
+		ev.State = StateEnded
+	case "session.status":
+		switch d.Status.Type {
 		case "busy":
 			ev.State = StateWorking
 		case "retry":
 			ev.State = StateWorking
-			ev.Detail = "ponawia"
+			ev.Detail = clip(strings.TrimSpace("ponawia " + d.Status.Message))
 		case "idle":
 			ev.State = StateIdle
 		}
-	case p.Type == "session.idle":
+	case "session.idle", "session.execution.succeeded":
 		ev.State = StateIdle
-	case p.Type == "session.error":
-		ev.State = StateError
-		ev.Detail = clip(firstNonEmpty(props.Error.Data.Message, props.Error.Name))
-		ev.Message = clipLong(firstNonEmpty(props.Error.Data.Message, props.Error.Name))
-	case p.Type == "session.deleted":
-		ev.State = StateEnded
-	case p.Type == "permission.replied":
+	case "session.execution.started":
 		ev.State = StateWorking
-	case strings.HasPrefix(p.Type, "permission."):
+	case "session.execution.failed":
+		ev.State = StateError
+		ev.Detail = clip(d.Error.text())
+		ev.Message = clipLong(d.Error.text())
+	case "session.execution.interrupted":
+		ev.State = StateIdle
+		ev.Detail = firstNonEmpty(interruptReason[d.Reason], "przerwane")
+	case "session.inbox.enqueued":
+		if d.Item.Type == "user" {
+			ev.Prompt = clipLong(d.Item.Payload.Text)
+		}
+	case "session.tool.called":
+		ev.State = StateWorking
+		ev.Tool = clip(d.Name)
+		ev.Detail = toolDetail(firstNonEmpty(d.Name, "narzędzie"), d.Input)
+	case "session.tool.failed":
+		ev.Detail = clip("błąd narzędzia: " + d.Error.text())
+	case "session.text.ended":
+		ev.Message = clipLong(d.Text)
+		ev.Detail = clip(d.Text)
+	case "permission.asked":
 		ev.State = StateWaiting
-		ev.Detail = clip("zgoda: " + firstNonEmpty(props.Title, props.Permission))
 		ev.Permission = true
+		what := d.Action
+		if len(d.Res) > 0 {
+			what += ": " + strings.Join(d.Res, ", ")
+		}
+		ev.Detail = clip("zgoda: " + firstNonEmpty(d.Message, what))
+	case "permission.replied":
+		ev.State = StateWorking
+	case "form.created":
+		ev.State = StateWaiting
+		ev.Detail = clip("pytanie: " + d.Form.Title)
+	case "form.replied", "form.cancelled":
+		ev.State = StateWorking
 	}
 	return ev, nil
 }

@@ -172,6 +172,10 @@ func (s *Store) Apply(ev Event) {
 	if ev.Message != "" {
 		sess.LastMessage = ev.Message
 	}
+	// A finished turn shows the start of the last reply, whichever agent sent it.
+	if ev.State == StateIdle && ev.Detail == "" && sess.LastMessage != "" {
+		sess.Detail = clip(sess.LastMessage)
+	}
 	if ev.Tool != "" {
 		if sess.Tools == nil {
 			sess.Tools = map[string]int{}

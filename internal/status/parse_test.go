@@ -50,21 +50,30 @@ func TestParseOpenCode(t *testing.T) {
 	tests := []struct {
 		name       string
 		body       string
-		wantID     string
 		wantState  State
 		wantTask   string
 		wantDetail string
 	}{
-		{"created", `{"host":"mac","directory":"/src/app","type":"session.created","properties":{"info":{"id":"o1","title":"New session","directory":"/src/app"}}}`, "o1", StateIdle, "New session", ""},
-		{"updated title", `{"type":"session.updated","properties":{"info":{"id":"o1","title":"Refactor auth"}}}`, "o1", "", "Refactor auth", ""},
-		{"busy", `{"type":"session.status","properties":{"sessionID":"o1","status":{"type":"busy"}}}`, "o1", StateWorking, "", ""},
-		{"retry", `{"type":"session.status","properties":{"sessionID":"o1","status":{"type":"retry"}}}`, "o1", StateWorking, "", "ponawia"},
-		{"idle status", `{"type":"session.status","properties":{"sessionID":"o1","status":{"type":"idle"}}}`, "o1", StateIdle, "", ""},
-		{"idle", `{"type":"session.idle","properties":{"sessionID":"o1"}}`, "o1", StateIdle, "", ""},
-		{"error", `{"type":"session.error","properties":{"sessionID":"o1","error":{"name":"APIError","data":{"message":"overloaded"}}}}`, "o1", StateError, "", "overloaded"},
-		{"permission asked", `{"type":"permission.asked","properties":{"sessionID":"o1","permission":"bash"}}`, "o1", StateWaiting, "", "zgoda: bash"},
-		{"permission replied", `{"type":"permission.replied","properties":{"sessionID":"o1"}}`, "o1", StateWorking, "", ""},
-		{"deleted", `{"type":"session.deleted","properties":{"info":{"id":"o1"}}}`, "o1", StateEnded, "", ""},
+		{"created", `{"host":"mac","directory":"/src","type":"session.created","data":{"sessionID":"o1","location":{"directory":"/src/app"},"slug":"x","title":"New session","model":{"id":"opus","providerID":"anthropic"}}}`, StateIdle, "New session", ""},
+		{"renamed", `{"type":"session.renamed","data":{"sessionID":"o1","title":"Refactor auth"}}`, "", "Refactor auth", ""},
+		{"busy", `{"type":"session.status","data":{"sessionID":"o1","status":{"type":"busy"}}}`, StateWorking, "", ""},
+		{"retry", `{"type":"session.status","data":{"sessionID":"o1","status":{"type":"retry","attempt":2,"message":"overloaded","next":1}}}`, StateWorking, "", "ponawia overloaded"},
+		{"idle status", `{"type":"session.status","data":{"sessionID":"o1","status":{"type":"idle"}}}`, StateIdle, "", ""},
+		{"idle", `{"type":"session.idle","data":{"sessionID":"o1"}}`, StateIdle, "", ""},
+		{"execution started", `{"type":"session.execution.started","data":{"sessionID":"o1"}}`, StateWorking, "", ""},
+		{"execution succeeded", `{"type":"session.execution.succeeded","data":{"sessionID":"o1"}}`, StateIdle, "", ""},
+		{"execution failed", `{"type":"session.execution.failed","data":{"sessionID":"o1","error":{"type":"api","message":"rate limit"}}}`, StateError, "", "rate limit"},
+		{"interrupted", `{"type":"session.execution.interrupted","data":{"sessionID":"o1","reason":"user"}}`, StateIdle, "", "przerwane przez Ciebie"},
+		{"prompt", `{"type":"session.inbox.enqueued","data":{"sessionID":"o1","inboxID":"m1","item":{"type":"user","payload":{"text":"dodaj testy"}}}}`, "", "", ""},
+		{"tool", `{"type":"session.tool.called","data":{"sessionID":"o1","id":"c1","name":"read","input":{"filePath":"/src/app/main.go"},"executed":false}}`, StateWorking, "", "read: /src/app/main.go"},
+		{"tool failed", `{"type":"session.tool.failed","data":{"sessionID":"o1","id":"c1","error":{"type":"x","message":"not found"},"executed":true}}`, "", "", "błąd narzędzia: not found"},
+		{"text", `{"type":"session.text.ended","data":{"sessionID":"o1","ordinal":0,"text":"Gotowe.\nTesty przechodzą."}}`, "", "", "Gotowe. Testy przechodzą."},
+		{"permission asked", `{"type":"permission.asked","data":{"id":"p1","sessionID":"o1","action":"bash","resources":["rm -rf build"]}}`, StateWaiting, "", "zgoda: bash: rm -rf build"},
+		{"permission with message", `{"type":"permission.asked","data":{"id":"p1","sessionID":"o1","action":"edit","resources":[],"message":"Edit main.go"}}`, StateWaiting, "", "zgoda: Edit main.go"},
+		{"permission replied", `{"type":"permission.replied","data":{"sessionID":"o1","requestID":"p1","reply":"once"}}`, StateWorking, "", ""},
+		{"question", `{"type":"form.created","data":{"form":{"id":"f1","sessionID":"o1","title":"Która baza?"}}}`, StateWaiting, "", "pytanie: Która baza?"},
+		{"question answered", `{"type":"form.replied","data":{"id":"f1","sessionID":"o1","answer":{}}}`, StateWorking, "", ""},
+		{"deleted", `{"type":"session.deleted","data":{"sessionID":"o1"}}`, StateEnded, "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -72,19 +81,63 @@ func TestParseOpenCode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if ev.SessionID != tt.wantID || ev.State != tt.wantState || ev.Task != tt.wantTask || ev.Detail != tt.wantDetail {
+			if ev.SessionID != "o1" || ev.State != tt.wantState || ev.Task != tt.wantTask || ev.Detail != tt.wantDetail {
 				t.Errorf("got id=%q state=%q task=%q detail=%q", ev.SessionID, ev.State, ev.Task, ev.Detail)
 			}
 		})
 	}
 }
 
+func TestParseOpenCodeExtras(t *testing.T) {
+	at := time.Now()
+	parse := func(body string) Event {
+		t.Helper()
+		ev, err := ParseOpenCode("h", []byte(body), at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ev
+	}
+	ev := parse(`{"directory":"/fallback","type":"session.created","data":{"sessionID":"o1","location":{"directory":"/src/app"},"model":{"id":"claude-opus-5-5","providerID":"anthropic","variant":"high"}}}`)
+	if ev.Cwd != "/src/app" || ev.Model != "anthropic/claude-opus-5-5 (high)" {
+		t.Errorf("created: cwd=%q model=%q", ev.Cwd, ev.Model)
+	}
+	ev = parse(`{"directory":"/fallback","type":"session.idle","data":{"sessionID":"o1"}}`)
+	if ev.Cwd != "/fallback" || ev.Model != "" {
+		t.Errorf("idle: cwd=%q model=%q", ev.Cwd, ev.Model)
+	}
+	ev = parse(`{"type":"session.model.selected","data":{"sessionID":"o1","model":{"id":"gpt-6","providerID":"openai"}}}`)
+	if ev.Model != "openai/gpt-6" || ev.State != "" {
+		t.Errorf("model selected: %+v", ev)
+	}
+	ev = parse(`{"type":"session.inbox.enqueued","data":{"sessionID":"o1","item":{"type":"user","payload":{"text":"dodaj\ntesty"}}}}`)
+	if ev.Prompt != "dodaj\ntesty" {
+		t.Errorf("prompt = %q", ev.Prompt)
+	}
+	ev = parse(`{"type":"session.tool.called","data":{"sessionID":"o1","name":"bash","input":{"command":"go test","description":"Run tests"}}}`)
+	if ev.Tool != "bash" || ev.Detail != "bash: Run tests" {
+		t.Errorf("tool: %+v", ev)
+	}
+	ev = parse(`{"type":"session.text.ended","data":{"sessionID":"o1","text":"Gotowe.\nTesty przechodzą."}}`)
+	if ev.Message != "Gotowe.\nTesty przechodzą." {
+		t.Errorf("message = %q", ev.Message)
+	}
+	ev = parse(`{"type":"permission.asked","data":{"id":"p1","sessionID":"o1","action":"bash","resources":[]}}`)
+	if !ev.Permission || ev.Detail != "zgoda: bash" {
+		t.Errorf("permission: %+v", ev)
+	}
+	ev = parse(`{"type":"server.connected","data":{}}`)
+	if ev.SessionID != "" {
+		t.Errorf("event without session should have no id: %+v", ev)
+	}
+}
+
 func TestParseOpenCodeHost(t *testing.T) {
-	ev, _ := ParseOpenCode("10.0.0.5", []byte(`{"type":"session.idle","properties":{"sessionID":"o1"}}`), time.Now())
+	ev, _ := ParseOpenCode("10.0.0.5", []byte(`{"type":"session.idle","data":{"sessionID":"o1"}}`), time.Now())
 	if ev.Host != "10.0.0.5" {
 		t.Errorf("fallback host = %q", ev.Host)
 	}
-	ev, _ = ParseOpenCode("10.0.0.5", []byte(`{"host":"mac","type":"session.idle","properties":{"sessionID":"o1"}}`), time.Now())
+	ev, _ = ParseOpenCode("10.0.0.5", []byte(`{"host":"mac","type":"session.idle","data":{"sessionID":"o1"}}`), time.Now())
 	if ev.Host != "mac" {
 		t.Errorf("reported host = %q", ev.Host)
 	}

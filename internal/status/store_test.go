@@ -175,3 +175,26 @@ func TestParseClaudeExtras(t *testing.T) {
 		t.Errorf("permission: %+v", ev)
 	}
 }
+
+func TestStoreIdleShowsLastReply(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	ev := func(e Event) {
+		e.Agent, e.Host, e.SessionID, e.At = "opencode", "mac", "o1", t0
+		s.Apply(e)
+	}
+	ev(Event{Kind: "session.created", State: StateIdle})
+	if d := s.List(t0)[0].Detail; d != "" {
+		t.Errorf("no reply yet, detail = %q", d)
+	}
+	ev(Event{Kind: "session.execution.started", State: StateWorking})
+	ev(Event{Kind: "session.text.ended", Detail: "Gotowe. Testy przechodzą.", Message: "Gotowe.\nTesty przechodzą."})
+	ev(Event{Kind: "session.execution.succeeded", State: StateIdle})
+	if d := s.List(t0)[0].Detail; d != "Gotowe. Testy przechodzą." {
+		t.Errorf("idle detail = %q", d)
+	}
+	ev(Event{Kind: "session.execution.interrupted", State: StateIdle, Detail: "przerwane przez Ciebie"})
+	if d := s.List(t0)[0].Detail; d != "przerwane przez Ciebie" {
+		t.Errorf("own detail should win, got %q", d)
+	}
+}
