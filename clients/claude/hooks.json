@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "SessionStart":      [{ "hooks": [{ "type": "http", "url": "http://SERVER:7777/hook/claude?host=HOST", "timeout": 2 }] }],
+    "UserPromptSubmit":  [{ "hooks": [{ "type": "http", "url": "http://SERVER:7777/hook/claude?host=HOST", "timeout": 2 }] }],
+    "PreToolUse":        [{ "hooks": [{ "type": "http", "url": "http://SERVER:7777/hook/claude?host=HOST", "timeout": 2 }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "http", "url": "http://SERVER:7777/hook/claude?host=HOST", "timeout": 2 }] }],
+    "Notification":      [{ "hooks": [{ "type": "http", "url": "http://SERVER:7777/hook/claude?host=HOST", "timeout": 2 }] }],
+    "Stop":              [{ "hooks": [{ "type": "http", "url": "http://SERVER:7777/hook/claude?host=HOST", "timeout": 2 }] }],
+    "StopFailure":       [{ "hooks": [{ "type": "http", "url": "http://SERVER:7777/hook/claude?host=HOST", "timeout": 2 }] }],
+    "SessionEnd":        [{ "hooks": [{ "type": "http", "url": "http://SERVER:7777/hook/claude?host=HOST", "timeout": 2 }] }]
+  }
+}

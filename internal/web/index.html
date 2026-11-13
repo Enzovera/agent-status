@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agenci</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --line: #d9d6cf; --text: #17161a; --muted: #6d6a73;
+    --signal: #d92d20; --warn: #b7791f; --ok: #2f6f4e;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121214; --panel: #1a1a1d; --line: #2e2e33; --text: #ecebe8; --muted: #94919a;
+      --signal: #ff5a4a; --warn: #e0a640; --ok: #6cbf8f;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; border-radius: 0; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 15px/1.4 "Archivo", "Segoe UI", system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 700; }
+  .bar { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
+  .group { display: inline-flex; border: 1px solid var(--line); }
+  .group button {
+    font: inherit; font-size: 13px; padding: 4px 10px; min-height: 32px; border: 0; cursor: pointer;
+    background: var(--panel); color: var(--muted);
+  }
+  .group button + button { border-left: 1px solid var(--line); }
+  .group button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+  .summary { color: var(--muted); font-size: 13px; }
+  .summary b { color: var(--text); }
+  .summary b.signal { color: var(--signal); }
+  .hosts { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  section { border: 1px solid var(--line); background: var(--panel); }
+  section h2 {
+    margin: 0; padding: 10px 12px; font-size: 13px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .04em; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between;
+  }
+  section h2 span { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .row { padding: 10px 12px; border-bottom: 1px solid var(--line); min-height: 44px; }
+  .row:last-child { border-bottom: 0; }
+  .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .project { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 6px; }
+  .state { font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .state.waiting { color: var(--signal); }
+  .state.error, .state.stale { color: var(--warn); }
+  .state.working { color: var(--ok); }
+  .state.idle, .state.ended { color: var(--muted); font-weight: 400; }
+  .task, .detail { font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .detail { color: var(--muted); }
+  .row.ended { opacity: .55; }
+  .empty, .offline { color: var(--muted); padding: 24px 0; }
+  .offline { color: var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agenci</h1>
+  <div class="bar">
+    <div class="group" role="group" aria-label="Grupuj według">
+      <button type="button" data-group="host">maszyna</button>
+      <button type="button" data-group="project">projekt</button>
+    </div>
+    <div class="summary" id="summary"></div>
+  </div>
+</header>
+<div id="offline" class="offline" hidden>Brak połączenia z serwerem</div>
+<div id="hosts" class="hosts"></div>
+<script>
+const LABEL = { waiting: "czeka na Ciebie", working: "pracuje", error: "błąd", idle: "gotowy", ended: "zakończona" };
+const AGENT = { claude: "Claude Code", opencode: "OpenCode" };
+
+function ago(iso, now) {
+  const s = Math.max(0, Math.round((now - new Date(iso)) / 1000));
+  if (s < 60) return s + " s";
+  if (s < 3600) return Math.floor(s / 60) + " min";
+  return Math.floor(s / 3600) + " h " + Math.floor((s % 3600) / 60) + " min";
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+const NO_PROJECT = "bez projektu";
+
+let groupBy = "host";
+try { if (localStorage.getItem("groupBy") === "project") groupBy = "project"; } catch {}
+
+function setGroup(g) {
+  groupBy = g;
+  try { localStorage.setItem("groupBy", g); } catch {}
+  for (const b of document.querySelectorAll("[data-group]")) b.setAttribute("aria-pressed", String(b.dataset.group === g));
+  paint();
+}
+for (const b of document.querySelectorAll("[data-group]")) b.addEventListener("click", () => setGroup(b.dataset.group));
+
+function render(data) {
+  const now = new Date(data.now);
+  const byProject = groupBy === "project";
+  // Sessions arrive sorted by urgency; grouping keeps that order inside each group.
+  const groups = new Map();
+  for (const s of data.sessions) {
+    const k = byProject ? (s.project || NO_PROJECT) : s.host;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
+  }
+  const hosts = document.getElementById("hosts");
+  hosts.replaceChildren();
+  if (data.sessions.length === 0) {
+    hosts.append(el("div", "empty", "Brak sesji"));
+  }
+  // Alphabetical, so sections don't jump around on every refresh; "bez projektu" goes last.
+  const order = ([a], [b]) => (a === NO_PROJECT) - (b === NO_PROJECT) || a.localeCompare(b);
+  for (const [key, list] of [...groups].sort(byProject ? order : (a, b) => a[0].localeCompare(b[0]))) {
+    const sec = el("section");
+    const h = el("h2", null, key);
+    h.append(el("span", null, list.filter(s => s.state !== "ended").length + " aktywne"));
+    sec.append(h);
+    for (const s of list) {
+      const row = el("div", "row " + s.state);
+      const top = el("div", "top");
+      const title = byProject ? s.host : (s.project || s.sessionId.slice(0, 8));
+      const name = el("div", "project", title);
+      name.append(el("span", "agent", AGENT[s.agent] || s.agent));
+      const cls = s.stale ? "stale" : s.state;
+      const label = s.stale ? "brak sygnału" : LABEL[s.state] || s.state;
+      top.append(name, el("div", "state " + cls, label + " · " + ago(s.updatedAt, now)));
+      row.append(top);
+      if (s.task) row.append(el("div", "task", s.task));
+      if (s.detail) row.append(el("div", "detail", s.detail));
+      row.title = s.cwd + "\n" + s.lastEvent;
+      sec.append(row);
+    }
+    hosts.append(sec);
+  }
+  const waiting = data.sessions.filter(s => s.state === "waiting").length;
+  const working = data.sessions.filter(s => s.state === "working").length;
+  const summary = document.getElementById("summary");
+  summary.replaceChildren();
+  const w = el("b", waiting ? "signal" : null, String(waiting));
+  summary.append(w, " czeka · ", el("b", null, String(working)), " pracuje · ", el("span", null));
+  summary.lastChild.id = "refreshed";
+  document.title = waiting ? `(${waiting}) Agenci` : "Agenci";
+}
+
+const REFRESH_MS = 3000;
+let lastData = null;   // last payload, re-rendered every second so "ago" keeps counting
+let lastFetch = 0;     // client time of the last successful fetch
+let inFlight = false;
+let timer = 0;
+
+function paint() {
+  if (!lastData) return;
+  // Shift the server's "now" by the time elapsed since the fetch, so ages stay live between polls.
+  const elapsed = Date.now() - lastFetch;
+  render({ ...lastData, now: new Date(new Date(lastData.now).getTime() + elapsed).toISOString() });
+  const s = Math.round(elapsed / 1000);
+  document.getElementById("refreshed").textContent = s < 2 ? "odświeżono teraz" : "odświeżono " + s + " s temu";
+}
+
+async function tick() {
+  clearTimeout(timer);
+  if (inFlight) return;
+  inFlight = true;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch("/api/sessions", { cache: "no-store", signal: ctrl.signal });
+    clearTimeout(t);
+    if (!r.ok) throw new Error(r.status);
+    lastData = await r.json();
+    lastFetch = Date.now();
+    document.getElementById("offline").hidden = true;
+  } catch {
+    document.getElementById("offline").hidden = false;
+  } finally {
+    inFlight = false;
+    paint();
+    timer = setTimeout(tick, REFRESH_MS);
+  }
+}
+
+// Background tabs throttle timers; catch up as soon as the page is visible again.
+document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+window.addEventListener("focus", tick);
+window.addEventListener("online", tick);
+setInterval(paint, 1000);
+setGroup(groupBy);
+tick();
+</script>
+</body>
+</html>
