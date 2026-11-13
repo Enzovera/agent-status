@@ -2,6 +2,7 @@ package status
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -226,5 +227,48 @@ func TestStoreTimeline(t *testing.T) {
 	got = s.List(t0.Add(30 * time.Hour))[0].Timeline
 	if len(got) != 2 || got[0].State != StateWaiting || got[1].State != StateIdle {
 		t.Errorf("pruned timeline = %+v", got)
+	}
+}
+
+func TestHostNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	s, _ := NewStore(path)
+	if err := s.SetHostName("192.168.1.5", "  Laptop   biuro "); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHostName("pc", "pc"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.HostNames(); len(got) != 1 || got["192.168.1.5"] != "Laptop biuro" {
+		t.Fatalf("names = %v", got)
+	}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s2.HostNames()["192.168.1.5"]; got != "Laptop biuro" {
+		t.Errorf("reloaded name = %q", got)
+	}
+	_ = s2.SetHostName("192.168.1.5", "")
+	if got := s2.HostNames(); len(got) != 0 {
+		t.Errorf("after reset = %v", got)
+	}
+}
+
+func TestLegacyStateFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	legacy := `[{"key":"claude/h/x","agent":"claude","host":"h","sessionId":"x","state":"idle","updatedAt":"2026-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list := s.List(time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)); len(list) != 1 || list[0].Host != "h" {
+		t.Errorf("legacy sessions = %+v", list)
 	}
 }

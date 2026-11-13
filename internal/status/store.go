@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type State string
@@ -107,16 +108,33 @@ const (
 	timelineLen   = 2000
 )
 
+const (
+	maxHostName  = 64  // runes in the display name of a machine
+	maxHostNames = 500 // renamed machines kept at once
+)
+
+// ErrTooManyNames is returned when no more machines can be renamed.
+var ErrTooManyNames = errors.New("too many renamed machines")
+
 type Store struct {
 	mu       sync.Mutex
 	path     string
 	sessions map[string]*Session
-	dirty    bool
+	// names maps a machine as agents report it to the name shown on the page.
+	// Unlike sessions, it never expires.
+	names map[string]string
+	dirty bool
+}
+
+// stateFile is the on-disk format. Older versions stored only the session list.
+type stateFile struct {
+	Sessions  []*Session        `json:"sessions"`
+	HostNames map[string]string `json:"hostNames,omitempty"`
 }
 
 // NewStore loads state from path if it exists. An empty path disables persistence.
 func NewStore(path string) (*Store, error) {
-	s := &Store{path: path, sessions: map[string]*Session{}}
+	s := &Store{path: path, sessions: map[string]*Session{}, names: map[string]string{}}
 	if path == "" {
 		return s, nil
 	}
@@ -127,14 +145,55 @@ func NewStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	var list []*Session
-	if err := json.Unmarshal(b, &list); err != nil {
+	var st stateFile
+	if strings.HasPrefix(strings.TrimSpace(string(b)), "[") {
+		err = json.Unmarshal(b, &st.Sessions)
+	} else {
+		err = json.Unmarshal(b, &st)
+	}
+	if err != nil {
 		return nil, err
 	}
-	for _, sess := range list {
+	for _, sess := range st.Sessions {
 		s.sessions[sess.Key] = sess
 	}
+	maps.Copy(s.names, st.HostNames)
 	return s, nil
+}
+
+// HostNames returns the display names of renamed machines, keyed by the
+// machine name agents report.
+func (s *Store) HostNames() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return maps.Clone(s.names)
+}
+
+// SetHostName sets the name shown for a machine. An empty name, or the
+// machine's own name, goes back to what the agents report.
+func (s *Store) SetHostName(host, name string) error {
+	name = strings.Join(strings.Fields(name), " ")
+	if utf8.RuneCountInString(name) > maxHostName {
+		name = string([]rune(name)[:maxHostName])
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old, had := s.names[host]
+	if name == "" || name == host {
+		if had {
+			delete(s.names, host)
+			s.dirty = true
+		}
+		return nil
+	}
+	if !had && len(s.names) >= maxHostNames {
+		return ErrTooManyNames
+	}
+	if old != name {
+		s.names[host] = name
+		s.dirty = true
+	}
+	return nil
 }
 
 func (s *Store) Apply(ev Event) {
@@ -313,15 +372,15 @@ func (s *Store) Save() error {
 		s.mu.Unlock()
 		return nil
 	}
-	list := make([]*Session, 0, len(s.sessions))
+	st := stateFile{Sessions: make([]*Session, 0, len(s.sessions)), HostNames: maps.Clone(s.names)}
 	for _, sess := range s.sessions {
 		c := sess.clone()
-		list = append(list, &c)
+		st.Sessions = append(st.Sessions, &c)
 	}
 	s.dirty = false
 	s.mu.Unlock()
 
-	b, err := json.MarshalIndent(list, "", "  ")
+	b, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}

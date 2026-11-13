@@ -19,6 +19,8 @@ Na Linux / macOS najpierw `chmod +x agent-status-*`. Opcja `-log plik.log` zapis
 
 Strona: `http://<IP serwera>:7777/`. API: `GET /api/sessions`. Serwer powinien mieć stały adres IP w LAN (rezerwacja DHCP w routerze).
 
+Nazwę maszyny można zmienić na stronie („zmień nazwę” w nagłówku maszyny albo w szczegółach sesji). Zmiana dotyczy tylko tego, co pokazuje strona, obowiązuje dla wszystkich oglądających i jest zapisywana w pliku `-state`; pusta nazwa przywraca tę, którą wysyła agent.
+
 Port 7777 trzeba wpuścić w zaporze, najlepiej tylko z sieci prywatnej. Na Windows (PowerShell jako administrator):
 
 ```powershell

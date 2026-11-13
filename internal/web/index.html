@@ -54,6 +54,12 @@
   }
   section h2 .name { text-transform: uppercase; letter-spacing: .04em; }
   section h2 small { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 8px; font-size: 12px; }
+  section h2 .rename {
+    font: 400 12px var(--sans); margin-left: 8px; padding: 0 4px; border: 0; background: none; cursor: pointer;
+    color: var(--muted); text-transform: none; letter-spacing: 0;
+  }
+  section h2 .rename:hover { color: var(--text); text-decoration: underline; }
+  section h2 .rename:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
   section.q-waiting h2 .name { color: var(--signal); }
   section.q-check h2 .name { color: var(--warn); }
   .ticks { position: relative; height: 14px; font: 11px/14px var(--mono); color: var(--muted); font-weight: 400; }
@@ -121,12 +127,14 @@
   .history .st.working { color: var(--ok); }
   .history .st.idle, .history .st.ended { color: var(--muted); }
   .history .kind { color: var(--muted); }
-  .actions { margin-top: 12px; }
+  .actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
   .actions button {
     font: inherit; font-size: 13px; padding: 4px 10px; min-height: 32px; cursor: pointer;
-    background: var(--panel); color: var(--signal); border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
   }
-  .actions button:hover { border-color: var(--signal); }
+  .actions button:hover { border-color: var(--text); }
+  .actions button[data-remove] { color: var(--signal); }
+  .actions button[data-remove]:hover { border-color: var(--signal); }
   .empty, .offline { color: var(--muted); padding: 24px 0; }
   .offline { color: var(--warn); }
 
@@ -210,6 +218,10 @@ function el(tag, cls, text) {
 
 const NO_PROJECT = "bez projektu";
 
+// Names given to machines on this page, keyed by the name agents report.
+let hostNames = {};
+const hostLabel = h => hostNames[h] || h;
+
 let groupBy = "host";
 try { const g = localStorage.getItem("groupBy"); if (g === "project" || g === "queue") groupBy = g; } catch {}
 
@@ -261,7 +273,7 @@ function details(s, now) {
     dl.append(el("dt", null, label), dd);
   };
   item("Katalog", s.cwd, true);
-  item("Maszyna", s.host);
+  item("Maszyna", hostNames[s.host] ? hostNames[s.host] + " (" + s.host + ")" : s.host);
   item("Agent", AGENT[s.agent] || s.agent);
   item("Model", s.model);
   item("Tryb", s.mode && (MODE[s.mode] || s.mode));
@@ -307,7 +319,11 @@ function details(s, now) {
   del.type = "button";
   del.dataset.remove = s.key;
   del.title = "Sesja wróci, jeśli agent wyśle kolejne zdarzenie";
-  actions.append(del);
+  const ren = el("button", null, "Zmień nazwę maszyny");
+  ren.type = "button";
+  ren.dataset.rename = s.host;
+  ren.title = "Nazwa widoczna na tej stronie dla maszyny " + s.host;
+  actions.append(ren, del);
   box.append(actions);
   return box;
 }
@@ -398,6 +414,22 @@ async function removeSessions(query) {
   }
   tick();
 }
+async function renameHost(host) {
+  const name = prompt("Nazwa maszyny " + host + " na tej stronie (puste = przywróć oryginalną):", hostLabel(host));
+  if (name === null) return;
+  try {
+    const r = await fetch("/api/hosts", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host, name }),
+    });
+    if (!r.ok) throw new Error(r.status);
+  } catch {
+    alert("Nie udało się zmienić nazwy maszyny");
+  }
+  tick();
+}
+
 document.getElementById("clear-ended").addEventListener("click", () => {
   const n = lastData ? lastData.sessions.filter(s => s.state === "ended").length : 0;
   if (n === 0) return;
@@ -419,8 +451,9 @@ function row(s, now) {
 
   const agent = AGENT[s.agent] || s.agent;
   const name = s.project || s.sessionId.slice(0, 8);
-  const [title, sub] = groupBy === "project" ? [s.host, agent]
-    : groupBy === "queue" ? [name, s.host + " · " + agent]
+  const host = hostLabel(s.host);
+  const [title, sub] = groupBy === "project" ? [host, agent]
+    : groupBy === "queue" ? [name, host + " · " + agent]
     : [name, agent];
   const who = el("div", "who");
   who.append(el("b", null, title), el("span", null, sub));
@@ -446,11 +479,20 @@ function row(s, now) {
   return r;
 }
 
-function section(name, count, list, now, cls) {
+// host: set when the section is one machine, so its name can be changed from the header.
+function section(name, count, list, now, cls, host) {
   const sec = el("section", cls);
   const h = el("h2", "lanes");
   const n = el("span", "name", name);
   n.append(el("small", null, count));
+  if (host != null) {
+    if (hostNames[host]) n.title = host;
+    const ren = el("button", "rename", "zmień nazwę");
+    ren.type = "button";
+    ren.dataset.rename = host;
+    ren.setAttribute("aria-label", "Zmień nazwę maszyny " + name);
+    n.append(ren);
+  }
   h.append(n, ticks(), el("span"));
   sec.append(h);
   // Fixed order (newest session first) so rows don't swap places whenever an agent reports.
@@ -462,6 +504,7 @@ function section(name, count, list, now, cls) {
 
 function render(data) {
   if (!showEnded) data = { ...data, sessions: data.sessions.filter(s => s.state !== "ended") };
+  hostNames = data.hostNames || {};
   const now = new Date(data.now).getTime();
   const hosts = document.getElementById("hosts");
   hosts.replaceChildren();
@@ -482,10 +525,12 @@ function render(data) {
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(s);
     }
-    // Alphabetical, so sections don't jump around on every refresh; "bez projektu" goes last.
-    const order = ([a], [b]) => (a === NO_PROJECT) - (b === NO_PROJECT) || a.localeCompare(b);
+    // Alphabetical by shown name, so sections don't jump around on every refresh; "bez projektu" goes last.
+    const label = k => byProject ? k : hostLabel(k);
+    const order = ([a], [b]) => (a === NO_PROJECT) - (b === NO_PROJECT) || label(a).localeCompare(label(b)) || a.localeCompare(b);
     for (const [key, list] of [...groups].sort(order)) {
-      hosts.append(section(key, list.filter(s => s.state !== "ended").length + " aktywne", list, now));
+      const active = list.filter(s => s.state !== "ended").length + " aktywne";
+      hosts.append(section(label(key), active, list, now, null, byProject ? null : key));
     }
   }
   const waiting = data.sessions.filter(s => s.state === "waiting").length;
@@ -513,7 +558,7 @@ function paint() {
   // Shift the server's "now" by the time elapsed since the fetch, so ages stay live between polls.
   const elapsed = Date.now() - lastFetch;
   const now = new Date(new Date(lastData.now).getTime() + elapsed);
-  const sig = JSON.stringify([lastData.sessions, groupBy, range, showEnded, [...expanded]]);
+  const sig = JSON.stringify([lastData.sessions, lastData.hostNames, groupBy, range, showEnded, [...expanded]]);
   const sel = window.getSelection();
   // Re-rendering would drop a text selection, so it waits while someone copies text from the
   // open details (paths, prompts). A stray selection in a row (double-click) never blocks it,
@@ -577,6 +622,11 @@ hostsRoot.addEventListener("click", e => {
   if (rm) {
     expanded.delete(rm.dataset.remove);
     removeSessions("key=" + encodeURIComponent(rm.dataset.remove));
+    return;
+  }
+  const ren = e.target.closest("[data-rename]");
+  if (ren) {
+    renameHost(ren.dataset.rename);
     return;
   }
   const head = e.target.closest(".head");

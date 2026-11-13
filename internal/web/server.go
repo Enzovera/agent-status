@@ -36,6 +36,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions", s.sessions)
 	// DELETE is not a "simple" request, so other sites can't trigger it from a browser.
 	mux.HandleFunc("DELETE /api/sessions", s.remove)
+	// PUT with a JSON body is not a "simple" request either.
+	mux.HandleFunc("PUT /api/hosts", s.renameHost)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(indexHTML)
@@ -69,9 +71,29 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"now":      s.now(),
-		"sessions": s.store.List(s.now()),
+		"now":       s.now(),
+		"sessions":  s.store.List(s.now()),
+		"hostNames": s.store.HostNames(),
 	})
+}
+
+// renameHost sets the name shown for a machine: body {"host": "...", "name": "..."}.
+// An empty name restores the name the agents report.
+func (s *Server) renameHost(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host string `json:"host"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil || req.Host == "" {
+		http.Error(w, "need JSON body with host", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.SetHostName(req.Host, req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	s.log.Info("host renamed", "host", req.Host, "name", req.Name)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // remove deletes sessions from the list: ?key=<key> (repeatable) or ?ended=1.
