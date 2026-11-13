@@ -34,6 +34,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /hook/claude", s.hook(status.ParseClaude))
 	mux.HandleFunc("POST /hook/opencode", s.hook(status.ParseOpenCode))
 	mux.HandleFunc("GET /api/sessions", s.sessions)
+	// DELETE is not a "simple" request, so other sites can't trigger it from a browser.
+	mux.HandleFunc("DELETE /api/sessions", s.remove)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(indexHTML)
@@ -70,6 +72,24 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 		"now":      s.now(),
 		"sessions": s.store.List(s.now()),
 	})
+}
+
+// remove deletes sessions from the list: ?key=<key> (repeatable) or ?ended=1.
+func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	var n int
+	switch {
+	case q.Get("ended") == "1":
+		n = s.store.RemoveEnded()
+	case len(q["key"]) > 0:
+		n = s.store.Remove(q["key"]...)
+	default:
+		http.Error(w, "need key or ended=1", http.StatusBadRequest)
+		return
+	}
+	s.log.Info("sessions removed", "count", n)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]int{"removed": n})
 }
 
 // hostOf prefers the name set in the hook URL (?host=), then the client address.

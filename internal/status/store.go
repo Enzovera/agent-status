@@ -235,6 +235,41 @@ func (s *Store) List(now time.Time) []Session {
 	return out
 }
 
+// Remove forgets the given sessions and returns how many existed. A session
+// that keeps reporting comes back with its next event.
+func (s *Store) Remove(keys ...string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, k := range keys {
+		if _, ok := s.sessions[k]; ok {
+			delete(s.sessions, k)
+			n++
+		}
+	}
+	if n > 0 {
+		s.dirty = true
+	}
+	return n
+}
+
+// RemoveEnded forgets every session that has ended and returns how many.
+func (s *Store) RemoveEnded() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for k, sess := range s.sessions {
+		if sess.State == StateEnded {
+			delete(s.sessions, k)
+			n++
+		}
+	}
+	if n > 0 {
+		s.dirty = true
+	}
+	return n
+}
+
 // Save writes the state file if anything changed since the last save.
 func (s *Store) Save() error {
 	s.mu.Lock()

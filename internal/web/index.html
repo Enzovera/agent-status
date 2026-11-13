@@ -56,6 +56,39 @@
   .task, .detail { font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .detail { color: var(--muted); }
   .row.ended { opacity: .55; }
+  .row.open { opacity: 1; }
+  .head { cursor: pointer; margin: -10px -12px; padding: 10px 12px; }
+  .head:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+  .head:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+  .head .project::before { content: "▸"; display: inline-block; width: 14px; color: var(--muted); font-weight: 400; }
+  .row.open .head .project::before { content: "▾"; }
+  .row.open .task, .row.open .detail { white-space: normal; overflow-wrap: anywhere; }
+  .info { margin: 20px 0 0; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 13px; }
+  .info dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; }
+  .info dt { color: var(--muted); }
+  .info dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
+  .info code { font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  .info h3 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 4px; }
+  .text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 6px 8px; background: var(--bg); border-left: 2px solid var(--line); }
+  .tools { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tools span { border: 1px solid var(--line); padding: 1px 6px; }
+  .tools b { font-weight: 600; margin-left: 4px; }
+  .history { list-style: none; margin: 0; padding: 0; }
+  .history li { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 2px 0; }
+  .history time { color: var(--muted); }
+  .history .msg { overflow-wrap: anywhere; min-width: 0; }
+  .history .st { font-weight: 600; margin-right: 6px; }
+  .history .st.waiting { color: var(--signal); }
+  .history .st.error { color: var(--warn); }
+  .history .st.working { color: var(--ok); }
+  .history .st.idle, .history .st.ended { color: var(--muted); }
+  .history .kind { color: var(--muted); }
+  .actions { margin-top: 12px; }
+  .actions button {
+    font: inherit; font-size: 13px; padding: 4px 10px; min-height: 32px; cursor: pointer;
+    background: var(--panel); color: var(--signal); border: 1px solid var(--line);
+  }
+  .actions button:hover { border-color: var(--signal); }
   .empty, .offline { color: var(--muted); padding: 24px 0; }
   .offline { color: var(--warn); }
 </style>
@@ -67,6 +100,10 @@
     <div class="group" role="group" aria-label="Grupuj według">
       <button type="button" data-group="host">maszyna</button>
       <button type="button" data-group="project">projekt</button>
+    </div>
+    <div class="group" role="group" aria-label="Zakończone sesje">
+      <button type="button" id="show-ended" title="Pokaż albo ukryj zakończone sesje">zakończone</button>
+      <button type="button" id="clear-ended" title="Usuń wszystkie zakończone sesje z listy">usuń zakończone</button>
     </div>
     <div class="summary" id="summary"></div>
   </div>
@@ -104,7 +141,121 @@ function setGroup(g) {
 }
 for (const b of document.querySelectorAll("[data-group]")) b.addEventListener("click", () => setGroup(b.dataset.group));
 
+const MODE = { default: "domyślny", plan: "planowanie", acceptEdits: "akceptuje edycje", bypassPermissions: "bez pytań", dontAsk: "bez pytań", auto: "auto" };
+const expanded = new Set();   // keys of sessions whose details are open
+try { for (const k of JSON.parse(sessionStorage.getItem("expanded") || "[]")) expanded.add(k); } catch {}
+
+function toggle(key) {
+  if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+  try { sessionStorage.setItem("expanded", JSON.stringify([...expanded])); } catch {}
+  paint();
+}
+
+const clock = iso => new Date(iso).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const sameDay = (a, b) => a.toDateString() === b.toDateString();
+function when(iso, now) {
+  const d = new Date(iso);
+  const day = sameDay(d, now) ? "" : d.toLocaleDateString("pl-PL", { day: "numeric", month: "short" }) + " ";
+  return day + clock(iso) + " (" + ago(iso, now) + " temu)";
+}
+
+function details(s, now) {
+  const box = el("div", "info");
+  const dl = el("dl");
+  const item = (label, value, code) => {
+    if (!value) return;
+    const dd = el("dd");
+    dd.append(code ? el("code", null, value) : value);
+    dl.append(el("dt", null, label), dd);
+  };
+  item("Katalog", s.cwd, true);
+  item("Maszyna", s.host);
+  item("Agent", AGENT[s.agent] || s.agent);
+  item("Model", s.model);
+  item("Tryb", s.mode && (MODE[s.mode] || s.mode));
+  item("Sesja", s.sessionId, true);
+  item("Rozpoczęta", s.startedAt && when(s.startedAt, now));
+  item("Ostatni sygnał", when(s.updatedAt, now) + (s.lastEvent ? " · " + s.lastEvent : ""));
+  const counts = [];
+  if (s.prompts) counts.push(s.prompts + " " + plural(s.prompts, "polecenie", "polecenia", "poleceń"));
+  if (s.toolCalls) counts.push(s.toolCalls + " " + plural(s.toolCalls, "narzędzie", "narzędzia", "narzędzi"));
+  if (s.permissions) counts.push(s.permissions + " " + plural(s.permissions, "prośba o zgodę", "prośby o zgodę", "próśb o zgodę"));
+  item("Aktywność", counts.join(" · "));
+  box.append(dl);
+
+  const block = (title, node) => { box.append(el("h3", null, title), node); };
+  if (s.tools && Object.keys(s.tools).length) {
+    const tools = el("div", "tools");
+    for (const [name, n] of Object.entries(s.tools).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+      const t = el("span", null, name);
+      t.append(el("b", null, String(n)));
+      tools.append(t);
+    }
+    block("Użyte narzędzia", tools);
+  }
+  if (s.lastPrompt) block("Ostatnie polecenie", el("p", "text", s.lastPrompt));
+  if (s.lastMessage) block(s.state === "error" ? "Ostatni błąd" : "Ostatnia odpowiedź", el("p", "text", s.lastMessage));
+  if (s.history && s.history.length) {
+    const ul = el("ul", "history");
+    for (const h of [...s.history].reverse()) {
+      const li = el("li");
+      const t = el("time", null, clock(h.at));
+      t.dateTime = h.at;
+      const msg = el("div", "msg");
+      if (h.state) msg.append(el("span", "st " + h.state, LABEL[h.state] || h.state));
+      msg.append(h.detail ? h.detail : el("span", "kind", h.kind));
+      li.title = h.kind;
+      li.append(t, msg);
+      ul.append(li);
+    }
+    block("Historia", ul);
+  }
+  const actions = el("div", "actions");
+  const del = el("button", null, "Usuń z listy");
+  del.type = "button";
+  del.dataset.remove = s.key;
+  del.title = "Sesja wróci, jeśli agent wyśle kolejne zdarzenie";
+  actions.append(del);
+  box.append(actions);
+  return box;
+}
+
+function plural(n, one, few, many) {
+  if (n === 1) return one;
+  const d = n % 10, dd = n % 100;
+  return d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
+}
+
+let showEnded = true;
+try { showEnded = localStorage.getItem("showEnded") !== "0"; } catch {}
+
+function setShowEnded(v) {
+  showEnded = v;
+  try { localStorage.setItem("showEnded", v ? "1" : "0"); } catch {}
+  document.getElementById("show-ended").setAttribute("aria-pressed", String(v));
+  paint();
+}
+document.getElementById("show-ended").addEventListener("click", () => setShowEnded(!showEnded));
+
+async function removeSessions(query) {
+  try {
+    const r = await fetch("/api/sessions?" + query, { method: "DELETE" });
+    if (!r.ok) throw new Error(r.status);
+  } catch {
+    alert("Nie udało się usunąć sesji");
+  }
+  tick();
+}
+document.getElementById("clear-ended").addEventListener("click", () => {
+  const n = lastData ? lastData.sessions.filter(s => s.state === "ended").length : 0;
+  if (n === 0) return;
+  if (confirm("Usunąć z listy " + n + " " + plural(n, "zakończoną sesję", "zakończone sesje", "zakończonych sesji") + "?")) {
+    removeSessions("ended=1");
+  }
+});
+
 function render(data) {
+  if (!showEnded) data = { ...data, sessions: data.sessions.filter(s => s.state !== "ended") };
   const now = new Date(data.now);
   const byProject = groupBy === "project";
   // Sessions arrive sorted by urgency; grouping keeps that order inside each group.
@@ -126,19 +277,32 @@ function render(data) {
     const h = el("h2", null, key);
     h.append(el("span", null, list.filter(s => s.state !== "ended").length + " aktywne"));
     sec.append(h);
-    for (const s of list) {
-      const row = el("div", "row " + s.state);
+    // Fixed order (newest session first) so rows don't swap places whenever an agent reports;
+    // urgency is already shown by colour and in the summary.
+    for (const s of [...list].sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.key.localeCompare(b.key))) {
+      const isOpen = expanded.has(s.key);
+      const row = el("div", "row " + s.state + (isOpen ? " open" : ""));
+      const head = el("div", "head");
+      head.tabIndex = 0;
+      head.setAttribute("role", "button");
+      head.setAttribute("aria-expanded", String(isOpen));
+      head.dataset.key = s.key;
       const top = el("div", "top");
       const title = byProject ? s.host : (s.project || s.sessionId.slice(0, 8));
       const name = el("div", "project", title);
       name.append(el("span", "agent", AGENT[s.agent] || s.agent));
       const cls = s.stale ? "stale" : s.state;
       const label = s.stale ? "brak sygnału" : LABEL[s.state] || s.state;
-      top.append(name, el("div", "state " + cls, label + " · " + ago(s.updatedAt, now)));
-      row.append(top);
-      if (s.task) row.append(el("div", "task", s.task));
-      if (s.detail) row.append(el("div", "detail", s.detail));
-      row.title = s.cwd + "\n" + s.lastEvent;
+      const st = el("div", "state " + cls, label + " · " + ago(s.updatedAt, now));
+      st.dataset.at = s.updatedAt;   // ticked in place by paint() between data changes
+      st.dataset.label = label;
+      top.append(name, st);
+      head.append(top);
+      if (s.task) head.append(el("div", "task", s.task));
+      if (s.detail) head.append(el("div", "detail", s.detail));
+      if (!isOpen) head.title = "Kliknij, aby zobaczyć szczegóły";
+      row.append(head);
+      if (isOpen) row.append(details(s, now));
       sec.append(row);
     }
     hosts.append(sec);
@@ -159,11 +323,32 @@ let lastFetch = 0;     // client time of the last successful fetch
 let inFlight = false;
 let timer = 0;
 
+let lastSig = "";      // what the DOM currently shows; rebuilt only when this changes
+
 function paint() {
   if (!lastData) return;
+  const hostsEl = document.getElementById("hosts");
   // Shift the server's "now" by the time elapsed since the fetch, so ages stay live between polls.
   const elapsed = Date.now() - lastFetch;
-  render({ ...lastData, now: new Date(new Date(lastData.now).getTime() + elapsed).toISOString() });
+  const now = new Date(new Date(lastData.now).getTime() + elapsed);
+  const sig = JSON.stringify([lastData.sessions, groupBy, showEnded, [...expanded]]);
+  const sel = window.getSelection();
+  // Re-rendering would drop a text selection (e.g. copying a path), so wait until it's gone.
+  const selecting = sel && !sel.isCollapsed && hostsEl.contains(sel.anchorNode);
+  if (sig !== lastSig && !selecting) {
+    const focusedKey = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.key : null;
+    render({ ...lastData, now: now.toISOString() });
+    lastSig = sig;
+    if (focusedKey) {
+      const again = [...hostsEl.querySelectorAll(".head")].find(h => h.dataset.key === focusedKey);
+      if (again) again.focus({ preventScroll: true });
+    }
+  } else {
+    // Nothing changed: only tick the ages, leaving the DOM (hover, focus, selection) alone.
+    for (const e of hostsEl.querySelectorAll(".state[data-at]")) {
+      e.textContent = e.dataset.label + " · " + ago(e.dataset.at, now);
+    }
+  }
   const s = Math.round(elapsed / 1000);
   document.getElementById("refreshed").textContent = s < 2 ? "odświeżono teraz" : "odświeżono " + s + " s temu";
 }
@@ -194,8 +379,30 @@ async function tick() {
 document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 window.addEventListener("focus", tick);
 window.addEventListener("online", tick);
+// One delegated listener: rows are rebuilt every second.
+const hostsRoot = document.getElementById("hosts");
+hostsRoot.addEventListener("click", e => {
+  const rm = e.target.closest("[data-remove]");
+  if (rm) {
+    expanded.delete(rm.dataset.remove);
+    removeSessions("key=" + encodeURIComponent(rm.dataset.remove));
+    return;
+  }
+  const head = e.target.closest(".head");
+  if (!head) return;
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed) return;   // finishing a text selection, not a click
+  toggle(head.dataset.key);
+});
+hostsRoot.addEventListener("keydown", e => {
+  const head = e.target.closest(".head");
+  if (!head || (e.key !== "Enter" && e.key !== " ")) return;
+  e.preventDefault();
+  toggle(head.dataset.key);
+});
 setInterval(paint, 1000);
 setGroup(groupBy);
+setShowEnded(showEnded);
 tick();
 </script>
 </body>

@@ -1,7 +1,10 @@
 package status
 
 import (
+	"fmt"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,5 +97,81 @@ func TestProjectName(t *testing.T) {
 		if got := projectName(in); got != want {
 			t.Errorf("projectName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestStoreDetails(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	ev := func(sec int, e Event) {
+		e.Agent, e.Host, e.SessionID, e.At = "claude", "pc1", "a", t0.Add(time.Duration(sec)*time.Second)
+		s.Apply(e)
+	}
+	ev(0, Event{Kind: "SessionStart", State: StateIdle, Model: "opus", Mode: "default"})
+	ev(1, Event{Kind: "UserPromptSubmit", State: StateWorking, Prompt: "napraw\ntesty"})
+	ev(2, Event{Kind: "PreToolUse", State: StateWorking, Detail: "Bash: go test", Tool: "Bash"})
+	ev(3, Event{Kind: "PreToolUse", State: StateWorking, Detail: "Bash: go test", Tool: "Bash"}) // repeat
+	ev(4, Event{Kind: "PreToolUse", State: StateWorking, Detail: "Read: a.go", Tool: "Read"})
+	ev(5, Event{Kind: "PermissionRequest", State: StateWaiting, Detail: "zgoda: Edit", Permission: true})
+	ev(6, Event{Kind: "PostCompact"}) // nothing visible: not in history
+	ev(7, Event{Kind: "Stop", State: StateIdle, Detail: "Gotowe.", Message: "Gotowe.\nWszystko działa."})
+
+	got := s.List(t0.Add(time.Minute))[0]
+	if got.Model != "opus" || got.Mode != "default" || got.LastPrompt != "napraw\ntesty" || got.LastMessage != "Gotowe.\nWszystko działa." {
+		t.Errorf("texts: %+v", got)
+	}
+	if got.Prompts != 1 || got.ToolCalls != 3 || got.Permissions != 1 || got.Tools["Bash"] != 2 || got.Tools["Read"] != 1 {
+		t.Errorf("counters: prompts=%d tools=%d perms=%d %v", got.Prompts, got.ToolCalls, got.Permissions, got.Tools)
+	}
+	if len(got.History) != 6 {
+		t.Fatalf("history len = %d: %+v", len(got.History), got.History)
+	}
+	if h := got.History[2]; h.Detail != "Bash: go test" || !h.At.Equal(t0.Add(3*time.Second)) {
+		t.Errorf("repeated event should refresh time: %+v", h)
+	}
+
+	// The returned copy must not share memory with the store.
+	got.Tools["Bash"] = 99
+	got.History[0].Kind = "x"
+	again := s.List(t0.Add(time.Minute))[0]
+	if again.Tools["Bash"] != 2 || again.History[0].Kind != "SessionStart" {
+		t.Error("List leaks internal state")
+	}
+}
+
+func TestStoreHistoryCap(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	for i := range historyLen + 10 {
+		s.Apply(Event{Agent: "claude", Host: "h", SessionID: "x", Kind: "PreToolUse", State: StateWorking, Detail: fmt.Sprint(i), At: t0})
+	}
+	h := s.List(t0)[0].History
+	if len(h) != historyLen || h[0].Detail != "10" || h[len(h)-1].Detail != fmt.Sprint(historyLen+9) {
+		t.Errorf("len=%d first=%q last=%q", len(h), h[0].Detail, h[len(h)-1].Detail)
+	}
+}
+
+func TestParseClaudeExtras(t *testing.T) {
+	at := time.Now()
+	long := strings.Repeat("ab\n", 1000)
+	ev, _ := ParseClaude("h", []byte(`{"session_id":"s","hook_event_name":"UserPromptSubmit","permission_mode":"plan","prompt":`+strconv.Quote(long)+`}`), at)
+	if ev.Mode != "plan" || len([]rune(ev.Prompt)) != maxLong || !strings.Contains(ev.Prompt, "\n") {
+		t.Errorf("prompt: mode=%q len=%d", ev.Mode, len([]rune(ev.Prompt)))
+	}
+	ev, _ = ParseClaude("h", []byte(`{"session_id":"s","hook_event_name":"SessionStart","model":"claude-opus-5-5"}`), at)
+	if ev.Model != "claude-opus-5-5" {
+		t.Errorf("model string: %q", ev.Model)
+	}
+	ev, _ = ParseClaude("h", []byte(`{"session_id":"s","hook_event_name":"SessionStart","model":{"id":"x","display_name":"Opus"}}`), at)
+	if ev.Model != "Opus" {
+		t.Errorf("model object: %q", ev.Model)
+	}
+	ev, _ = ParseClaude("h", []byte(`{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"a"}}`), at)
+	if ev.Tool != "Edit" {
+		t.Errorf("tool: %q", ev.Tool)
+	}
+	ev, _ = ParseClaude("h", []byte(`{"session_id":"s","hook_event_name":"PermissionRequest","tool_name":"Edit"}`), at)
+	if !ev.Permission || ev.Tool != "" {
+		t.Errorf("permission: %+v", ev)
 	}
 }

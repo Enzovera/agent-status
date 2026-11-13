@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-const maxText = 160
+const (
+	maxText = 160
+	maxLong = 2000
+)
 
 type claudePayload struct {
 	SessionID            string          `json:"session_id"`
@@ -20,6 +23,22 @@ type claudePayload struct {
 	NotificationType     string          `json:"notification_type"`
 	Message              string          `json:"message"`
 	LastAssistantMessage string          `json:"last_assistant_message"`
+	PermissionMode       string          `json:"permission_mode"`
+	Model                json.RawMessage `json:"model"`
+}
+
+// modelName accepts the model as a plain string or as an object with an id.
+func modelName(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var o struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"display_name"`
+	}
+	_ = json.Unmarshal(raw, &o)
+	return firstNonEmpty(o.DisplayName, o.ID)
 }
 
 // ParseClaude maps a Claude Code hook payload (sent by an "http" hook) to an Event.
@@ -36,6 +55,8 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		Kind:      p.HookEventName,
 		Task:      clip(p.SessionTitle),
 		At:        at,
+		Model:     clip(modelName(p.Model)),
+		Mode:      clip(p.PermissionMode),
 	}
 	switch p.HookEventName {
 	case "SessionStart":
@@ -45,12 +66,15 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		if ev.Task == "" {
 			ev.Task = clip(p.Prompt)
 		}
+		ev.Prompt = clipLong(p.Prompt)
 	case "PreToolUse":
 		ev.State = StateWorking
 		ev.Detail = toolDetail(p.ToolName, p.ToolInput)
+		ev.Tool = clip(p.ToolName)
 	case "PermissionRequest":
 		ev.State = StateWaiting
 		ev.Detail = "zgoda: " + toolDetail(p.ToolName, p.ToolInput)
+		ev.Permission = true
 	case "Notification":
 		switch p.NotificationType {
 		case "permission_prompt", "agent_needs_input", "elicitation_dialog", "elicitation_url_dialog":
@@ -62,9 +86,11 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 	case "Stop":
 		ev.State = StateIdle
 		ev.Detail = clip(p.LastAssistantMessage)
+		ev.Message = clipLong(p.LastAssistantMessage)
 	case "StopFailure":
 		ev.State = StateError
 		ev.Detail = clip(p.Message)
+		ev.Message = clipLong(p.Message)
 	case "SessionEnd":
 		ev.State = StateEnded
 	}
@@ -166,6 +192,7 @@ func ParseOpenCode(fallbackHost string, body []byte, at time.Time) (Event, error
 	case p.Type == "session.error":
 		ev.State = StateError
 		ev.Detail = clip(firstNonEmpty(props.Error.Data.Message, props.Error.Name))
+		ev.Message = clipLong(firstNonEmpty(props.Error.Data.Message, props.Error.Name))
 	case p.Type == "session.deleted":
 		ev.State = StateEnded
 	case p.Type == "permission.replied":
@@ -173,6 +200,7 @@ func ParseOpenCode(fallbackHost string, body []byte, at time.Time) (Event, error
 	case strings.HasPrefix(p.Type, "permission."):
 		ev.State = StateWaiting
 		ev.Detail = clip("zgoda: " + firstNonEmpty(props.Title, props.Permission))
+		ev.Permission = true
 	}
 	return ev, nil
 }
@@ -193,4 +221,14 @@ func clip(s string) string {
 		return s
 	}
 	return string(r[:maxText-1]) + "…"
+}
+
+// clipLong keeps line breaks (the details view shows them) but caps the length.
+func clipLong(s string) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= maxLong {
+		return s
+	}
+	return string(r[:maxLong-1]) + "…"
 }
