@@ -99,3 +99,5 @@ Wymaga Go 1.23+:
 ```
 go build -o bin/agent-status.exe ./cmd/agent-status
 ```
+
+Nowe wydanie: `git tag v0.2.0 && git push origin v0.2.0` — workflow `.github/workflows/release.yml` zbuduje serwer na wszystkie platformy i opublikuje wydanie z plikami.
