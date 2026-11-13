@@ -1,4 +1,4 @@
-﻿# agent-status client installer for Windows (Claude Code hooks + OpenCode plugin).
+# agent-status client installer for Windows (Claude Code hooks + OpenCode plugin).
 #
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Enzovera/agent-status/main/install/client.ps1))) -Server 192.168.1.10
 #
@@ -62,7 +62,7 @@ function Install-Claude {
     if (@($settings.hooks.PSObject.Properties).Count -eq 0) { $settings.PSObject.Properties.Remove("hooks") }
     $json = ConvertTo-Json -InputObject $settings -Depth 50
     [IO.File]::WriteAllText($path, $json, (New-Object Text.UTF8Encoding $false))
-    if ($Uninstall) { Write-Host "Claude Code: usunięto hooki z $path" }
+    if ($Uninstall) { Write-Host "Claude Code: usunieto hooki z $path" }
     else { Write-Host "Claude Code: hooki dopisane do $path (kopia: settings.json.bak)" }
 }
 
@@ -70,7 +70,7 @@ function Install-OpenCode {
     $dir = Join-Path $HOME ".config\opencode\plugins"
     $path = Join-Path $dir "agent-status.ts"
     if ($Uninstall) {
-        if (Test-Path $path) { Remove-Item $path; Write-Host "OpenCode: usunięto $path" }
+        if (Test-Path $path) { Remove-Item $path; Write-Host "OpenCode: usunieto $path" }
         return
     }
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -85,15 +85,15 @@ function Install-OpenCode {
 $claude = -not $SkipClaude -and ((Test-Path (Join-Path $HOME ".claude")) -or (Get-Command claude -ErrorAction SilentlyContinue))
 $opencode = -not $SkipOpenCode -and ((Test-Path (Join-Path $HOME ".config\opencode")) -or (Get-Command opencode -ErrorAction SilentlyContinue))
 
-if ($claude) { Install-Claude } else { Write-Host "Claude Code: pominięto (nie znaleziono)" }
-if ($opencode) { Install-OpenCode } else { Write-Host "OpenCode: pominięto (nie znaleziono)" }
+if ($claude) { Install-Claude } else { Write-Host "Claude Code: pominieto (nie znaleziono)" }
+if ($opencode) { Install-OpenCode } else { Write-Host "OpenCode: pominieto (nie znaleziono)" }
 
 if (-not $Uninstall) {
     try {
         Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 "$Server/api/sessions" | Out-Null
         Write-Host "Serwer $Server odpowiada."
     } catch {
-        Write-Warning "Serwer $Server nie odpowiada. Sprawdź adres i zaporę na serwerze (port TCP)."
+        Write-Warning "Serwer $Server nie odpowiada. Sprawdz adres i zapore na serwerze (port TCP)."
     }
-    Write-Host "Gotowe. Nowe sesje będą widoczne jako '$Name'. Uruchom ponownie otwarte sesje Claude Code / OpenCode."
+    Write-Host "Gotowe. Nowe sesje beda widoczne jako '$Name'. Uruchom ponownie otwarte sesje Claude Code / OpenCode."
 }
