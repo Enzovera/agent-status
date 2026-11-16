@@ -168,6 +168,9 @@
       <button type="button" id="show-ended" title="Pokaż albo ukryj zakończone sesje">zakończone</button>
       <button type="button" id="clear-ended" title="Usuń wszystkie zakończone sesje z listy">usuń zakończone</button>
     </div>
+    <div class="group" role="group" aria-label="Powiadomienia">
+      <button type="button" id="notify" aria-pressed="false">powiadomienia</button>
+    </div>
     <div class="summary" id="summary"></div>
   </div>
 </header>
@@ -601,6 +604,7 @@ async function tick() {
     if (!r.ok) throw new Error(r.status);
     lastData = await r.json();
     lastFetch = Date.now();
+    watch(lastData.sessions);
     document.getElementById("offline").hidden = true;
   } catch {
     document.getElementById("offline").hidden = false;
@@ -641,6 +645,83 @@ hostsRoot.addEventListener("keydown", e => {
   e.preventDefault();
   toggle(head.dataset.key);
 });
+// Browser notifications: a session starts waiting for you, fails, goes silent while working,
+// or finishes its work. Only changes seen while the page is open count; the first load sets the baseline.
+const ALERT = { waiting: "Czeka na Ciebie", error: "Błąd", stale: "Brak sygnału", idle: "Skończył pracę" };
+const canNotify = "Notification" in window && window.isSecureContext;
+let notifyOn = false;
+try { notifyOn = localStorage.getItem("notify") === "1"; } catch {}
+let seen = null;   // session key -> state as shown (stale counts as its own state)
+
+const shownState = s => s.stale ? "stale" : s.state;
+
+function watch(sessions) {
+  const prev = seen;
+  seen = new Map(sessions.map(s => [s.key, shownState(s)]));
+  if (!prev || !notifyOn || !canNotify || Notification.permission !== "granted") return;
+  for (const s of sessions) {
+    const now = shownState(s), was = prev.get(s.key);
+    if (now === was || !ALERT[now]) continue;
+    // "Done" only after actual work, not when an idle session shows up or a question gets dismissed.
+    if (now === "idle" && was !== "working" && was !== "stale") continue;
+    alertFor(s, now);
+  }
+}
+
+function alertFor(s, st) {
+  // You are looking at the page already.
+  if (document.hasFocus() && !document.hidden) return;
+  const name = s.project || s.sessionId.slice(0, 8);
+  const text = st === "idle" ? s.lastMessage || s.detail : s.detail || s.task || s.lastMessage;
+  // Same tag for the same moment, so several open tabs show one notification, not one each.
+  const tl = s.timeline && s.timeline.length ? s.timeline[s.timeline.length - 1].at : s.updatedAt;
+  try {
+    const n = new Notification(ALERT[st] + " · " + name, {
+      body: hostLabel(s.host) + " · " + (AGENT[s.agent] || s.agent) + (text ? "\n" + text.slice(0, 240) : ""),
+      tag: s.key + "|" + st + "|" + (st === "stale" ? s.updatedAt : tl),
+      requireInteraction: st !== "idle",
+    });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+      if (!expanded.has(s.key)) toggle(s.key);
+      const head = [...document.querySelectorAll("#hosts .head")].find(h => h.dataset.key === s.key);
+      if (head) { head.scrollIntoView({ block: "center" }); head.focus({ preventScroll: true }); }
+    };
+  } catch {}
+}
+
+const notifyBtn = document.getElementById("notify");
+function showNotify() {
+  const granted = canNotify && Notification.permission === "granted";
+  notifyBtn.setAttribute("aria-pressed", String(notifyOn && granted));
+  notifyBtn.title = !canNotify ? "Przeglądarka pozwala na powiadomienia tylko na localhost albo przez HTTPS"
+    : Notification.permission === "denied" ? "Powiadomienia są zablokowane dla tej strony w ustawieniach przeglądarki"
+    : notifyOn && granted ? "Powiadamiam, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę. Kliknij, aby wyłączyć"
+    : "Włącz powiadomienia, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę";
+}
+notifyBtn.addEventListener("click", async () => {
+  if (!canNotify) { alert(notifyBtn.title + ".\nTa strona jest otwarta pod " + location.host + "."); return; }
+  if (notifyOn && Notification.permission === "granted") {
+    notifyOn = false;
+  } else {
+    const p = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+    if (p !== "granted") { showNotify(); alert("Powiadomienia są zablokowane dla tej strony. Odblokuj je w ustawieniach witryny (ikona obok adresu)."); return; }
+    notifyOn = true;
+    try { new Notification("Powiadomienia włączone", { body: "Dam znać, gdy agent będzie Cię potrzebował albo skończy pracę.", tag: "agent-status-on" }); } catch {}
+  }
+  try { localStorage.setItem("notify", notifyOn ? "1" : "0"); } catch {}
+  showNotify();
+});
+showNotify();
+
+// Hidden tabs get their timers throttled down to once a minute; a worker's timers are not,
+// so while notifications are on it keeps the polling (and the alerts) on time.
+try {
+  const beat = new Worker(URL.createObjectURL(new Blob(["setInterval(() => postMessage(0), " + REFRESH_MS + ")"], { type: "text/javascript" })));
+  beat.onmessage = () => { if (document.hidden && notifyOn) tick(); };
+} catch {}
+
 setInterval(paint, 1000);
 setGroup(groupBy);
 setRange(range);
