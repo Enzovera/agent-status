@@ -21,6 +21,18 @@ Strona: `http://<IP serwera>:7777/`. API: `GET /api/sessions`. Serwer powinien m
 
 Nazwę maszyny można zmienić na stronie („zmień nazwę” w nagłówku maszyny albo w szczegółach sesji). Zmiana dotyczy tylko tego, co pokazuje strona, obowiązuje dla wszystkich oglądających i jest zapisywana w pliku `-state`; pusta nazwa przywraca tę, którą wysyła agent.
 
+### Strona na tablecie lub drugim ekranie
+
+Przyciski w nagłówku są pomyślane pod ekran, który stoi obok i na który tylko zerkasz:
+
+- **dźwięk** — krótki sygnał, gdy sesja zaczyna czekać na Ciebie, ma błąd, traci sygnał albo kończy pracę. Gra też wtedy, gdy strona jest na wierzchu (powiadomienia w takiej sytuacji się nie pokazują). Po przeładowaniu strony przeglądarka wstrzymuje dźwięk do pierwszego dotknięcia — przycisk pokazuje wtedy „dźwięk: dotknij”.
+- **nie wygaszaj** — ekran nie gaśnie, dopóki strona jest widoczna.
+- **pełny ekran** — bez pasków przeglądarki.
+
+Gdy coś czeka na Ciebie, cały ekran dostaje czerwoną ramkę, a nad listą pojawia się duży pasek z liczbą sesji (pomarańczowy, gdy sesja ma błąd albo straciła sygnał). Dotknięcie paska przełącza na widok „kolejka”. Na ekranie dotykowym przyciski są większe.
+
+Powiadomienia i „nie wygaszaj” przeglądarka pozwala włączyć tylko na `localhost` albo przez HTTPS. Na urządzeniu, które otwiera stronę po adresie w LAN (`http://192.168.1.10:7777`), otwórz `edge://flags/#unsafely-treat-insecure-origin-as-secure` (w Chrome `chrome://flags/...`), wpisz adres serwera, ustaw *Enabled* i uruchom przeglądarkę ponownie. Dźwięk, ramka i pełny ekran działają bez tego.
+
 Port 7777 trzeba wpuścić w zaporze, najlepiej tylko z sieci prywatnej. Na Windows (PowerShell jako administrator):
 
 ```powershell

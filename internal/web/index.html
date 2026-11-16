@@ -10,7 +10,7 @@
   :root {
     --bg: #f2f3f1; --panel: #fbfbfa; --line: #d6d8d3; --grid: #e6e8e3; --text: #1a1c19; --muted: #686d66;
     --signal: #d0401f; --signal-soft: #fbe7e1; --ok: #3c8a5a; --warn: #b07405; --warn-soft: #f8efdc;
-    --idle: #c4c8c1; --ended: #e0e2dd;
+    --idle: #c4c8c1; --ended: #e0e2dd; --on-signal: #fff;
     --sans: "Archivo", "Segoe UI", system-ui, sans-serif;
     --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
     color-scheme: light;
@@ -19,7 +19,7 @@
     :root {
       --bg: #131513; --panel: #1a1c1a; --line: #2e322e; --grid: #242724; --text: #e8eae6; --muted: #959b93;
       --signal: #ff7552; --signal-soft: #33201b; --ok: #5dbb83; --warn: #e3a63c; --warn-soft: #2c2414;
-      --idle: #454a44; --ended: #2a2d2a;
+      --idle: #454a44; --ended: #2a2d2a; --on-signal: #131513;
       color-scheme: dark;
     }
   }
@@ -39,6 +39,22 @@
   .group button + button { border-left: 1px solid var(--line); }
   .group button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
   .group button:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+  .group button.locked { color: var(--warn); }
+  button, .head { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+
+  /* Seen from the corner of your eye: a frame around the whole screen and a big line on top
+     while a session waits for you (or needs a look). */
+  body::before { content: ""; position: fixed; inset: 0; z-index: 10; pointer-events: none; border: 0 solid transparent; }
+  body.alarm-waiting::before { border: 8px solid var(--signal); }
+  body.alarm-check::before { border: 8px solid var(--warn); }
+  .beacon {
+    display: block; width: 100%; margin: 0 0 16px; padding: 12px 16px; border: 0; cursor: pointer; text-align: left;
+    font: 700 22px/1.25 var(--sans); background: var(--signal); color: var(--on-signal);
+  }
+  .beacon.check { background: var(--warn); }
+  .beacon[hidden] { display: none; }
+  .beacon small { display: block; font: 400 14px/1.35 var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .beacon:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
   .summary { color: var(--muted); font-size: 13px; }
   .summary b { color: var(--text); }
   .summary b.signal { color: var(--signal); }
@@ -58,7 +74,6 @@
     font: 400 12px var(--sans); margin-left: 8px; padding: 0 4px; border: 0; background: none; cursor: pointer;
     color: var(--muted); text-transform: none; letter-spacing: 0;
   }
-  section h2 .rename:hover { color: var(--text); text-decoration: underline; }
   section h2 .rename:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
   section.q-waiting h2 .name { color: var(--signal); }
   section.q-check h2 .name { color: var(--warn); }
@@ -70,7 +85,6 @@
   .row { border-bottom: 1px solid var(--grid); }
   .row:last-child { border-bottom: 0; }
   .head { padding: 10px 14px; cursor: pointer; }
-  .head:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
   .head:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
   .row.waiting { background: var(--signal-soft); }
   .row.error, .row.stale { background: var(--warn-soft); }
@@ -132,11 +146,24 @@
     font: inherit; font-size: 13px; padding: 4px 10px; min-height: 32px; cursor: pointer;
     background: var(--panel); color: var(--text); border: 1px solid var(--line);
   }
-  .actions button:hover { border-color: var(--text); }
   .actions button[data-remove] { color: var(--signal); }
-  .actions button[data-remove]:hover { border-color: var(--signal); }
   .empty, .offline { color: var(--muted); padding: 24px 0; }
   .offline { color: var(--warn); }
+
+  /* Hover styles only where there is a real pointer: on a touch screen they stick after a tap. */
+  @media (hover: hover) {
+    .head:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+    section h2 .rename:hover { color: var(--text); text-decoration: underline; }
+    .actions button:hover { border-color: var(--text); }
+    .actions button[data-remove]:hover { border-color: var(--signal); }
+  }
+  /* Finger-sized targets on a touch screen. */
+  @media (pointer: coarse) {
+    .group button, .actions button { min-height: 44px; padding: 8px 14px; font-size: 15px; }
+    section h2 .rename { padding: 10px 8px; margin: -10px 0 -10px 4px; font-size: 13px; }
+    .head { padding: 14px; }
+    .summary { font-size: 15px; }
+  }
 
   @media (max-width: 700px) {
     .lanes { grid-template-columns: minmax(0, 1fr); }
@@ -168,12 +195,16 @@
       <button type="button" id="show-ended" title="Pokaż albo ukryj zakończone sesje">zakończone</button>
       <button type="button" id="clear-ended" title="Usuń wszystkie zakończone sesje z listy">usuń zakończone</button>
     </div>
-    <div class="group" role="group" aria-label="Powiadomienia">
+    <div class="group" role="group" aria-label="Sygnały i ekran">
       <button type="button" id="notify" aria-pressed="false">powiadomienia</button>
+      <button type="button" id="sound" aria-pressed="false">dźwięk</button>
+      <button type="button" id="awake" aria-pressed="false">nie wygaszaj</button>
+      <button type="button" id="fullscreen" aria-pressed="false">pełny ekran</button>
     </div>
     <div class="summary" id="summary"></div>
   </div>
 </header>
+<button type="button" id="beacon" class="beacon" hidden></button>
 <div class="legend" aria-hidden="true">
   <span><i class="s-waiting"></i>czeka na Ciebie</span>
   <span><i class="s-working"></i>pracuje</span>
@@ -543,7 +574,32 @@ function render(data) {
   const w = el("b", waiting ? "signal" : null, String(waiting));
   summary.append(w, " czeka · ", el("b", null, String(working)), " pracuje");
   document.title = waiting ? `(${waiting}) Agenci` : "Agenci";
+  alarm(data.sessions);
 }
+
+// Frame around the screen and the big line on top: what needs you, readable at a glance.
+function alarm(sessions) {
+  const waiting = sessions.filter(s => s.state === "waiting");
+  const check = sessions.filter(s => s.state === "error" || (s.stale && s.state !== "ended"));
+  const list = waiting.length ? waiting : check;
+  document.body.classList.toggle("alarm-waiting", waiting.length > 0);
+  document.body.classList.toggle("alarm-check", !waiting.length && check.length > 0);
+  const b = document.getElementById("beacon");
+  b.hidden = list.length === 0;
+  if (!list.length) return;
+  const n = list.length;
+  b.className = "beacon" + (waiting.length ? "" : " check");
+  b.replaceChildren(
+    n + " " + (waiting.length ? plural(n, "sesja czeka", "sesje czekają", "sesji czeka") + " na Ciebie"
+      : plural(n, "sesja", "sesje", "sesji") + " do sprawdzenia"),
+    el("small", null, list.map(s => (s.project || s.sessionId.slice(0, 8)) + " (" + hostLabel(s.host) + ")").join(" · ")),
+  );
+  b.title = "Pokaż kolejkę";
+}
+document.getElementById("beacon").addEventListener("click", () => {
+  setGroup("queue");
+  window.scrollTo({ top: 0 });
+});
 
 const REFRESH_MS = 3000;
 let lastData = null;   // last payload, re-rendered every second so "ago" keeps counting
@@ -658,15 +714,148 @@ const shownState = s => s.stale ? "stale" : s.state;
 function watch(sessions) {
   const prev = seen;
   seen = new Map(sessions.map(s => [s.key, shownState(s)]));
-  if (!prev || !notifyOn || !canNotify || Notification.permission !== "granted") return;
+  if (!prev) return;
+  const changes = [];
   for (const s of sessions) {
     const now = shownState(s), was = prev.get(s.key);
     if (now === was || !ALERT[now]) continue;
     // "Done" only after actual work, not when an idle session shows up or a question gets dismissed.
     if (now === "idle" && was !== "working" && was !== "stale") continue;
-    alertFor(s, now);
+    changes.push([s, now]);
+  }
+  if (!changes.length) return;
+  if (notifyOn && canNotify && Notification.permission === "granted") {
+    for (const [s, st] of changes) alertFor(s, st);
+  }
+  if (soundOn) chime(changes.map(c => c[1]));
+}
+
+// Some browser features only work on localhost or over HTTPS. The tablet opens the page by
+// the server's LAN address over plain HTTP, so say how to allow it there.
+function insecureHelp(what) {
+  alert(what + " działa tylko na localhost albo przez HTTPS, a ta strona jest otwarta pod " + location.origin + ".\n\n" +
+    "Aby to włączyć na tym urządzeniu: otwórz edge://flags/#unsafely-treat-insecure-origin-as-secure " +
+    "(w Chrome: chrome://flags/#unsafely-treat-insecure-origin-as-secure), wpisz " + location.origin +
+    ", ustaw Enabled i uruchom przeglądarkę ponownie.");
+}
+
+// Sound: plays even while you look at the page (the tablet always does), unlike notifications.
+// Tones are generated, no audio files. Browsers start audio muted until the page is touched,
+// so after a reload the button asks for one tap.
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let soundOn = false;
+try { soundOn = localStorage.getItem("sound") === "1"; } catch {}
+let audio = null;
+
+function audioCtx() {
+  if (!audio && AudioCtx) {
+    audio = new AudioCtx();
+    audio.onstatechange = showSound;
+  }
+  return audio;
+}
+
+// [frequency Hz, start s, length s] per state, most urgent first.
+const CHIMES = {
+  waiting: [[660, 0, .25], [880, .18, .45]],
+  error: [[392, 0, .3], [294, .25, .5]],
+  stale: [[392, 0, .3], [294, .25, .5]],
+  idle: [[523, 0, .6]],
+};
+function chime(states) {
+  const ctx = audioCtx();
+  if (!ctx || ctx.state !== "running") return;
+  const st = Object.keys(CHIMES).find(k => states.includes(k));
+  if (!st) return;
+  const t0 = ctx.currentTime + .02;
+  for (const [f, at, len] of CHIMES[st]) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.value = f;
+    g.gain.setValueAtTime(.0001, t0 + at);
+    g.gain.exponentialRampToValueAtTime(.3, t0 + at + .02);
+    g.gain.exponentialRampToValueAtTime(.0001, t0 + at + len);
+    o.connect(g).connect(ctx.destination);
+    o.start(t0 + at);
+    o.stop(t0 + at + len + .05);
   }
 }
+
+const soundBtn = document.getElementById("sound");
+function showSound() {
+  const locked = soundOn && (!audio || audio.state !== "running");
+  soundBtn.setAttribute("aria-pressed", String(soundOn));
+  soundBtn.classList.toggle("locked", locked);
+  soundBtn.textContent = locked ? "dźwięk: dotknij" : "dźwięk";
+  soundBtn.title = locked ? "Przeglądarka wstrzymała dźwięk do pierwszego dotknięcia strony"
+    : soundOn ? "Sygnał dźwiękowy, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę. Kliknij, aby wyłączyć"
+    : "Włącz sygnał dźwiękowy, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę";
+}
+soundBtn.hidden = !AudioCtx;
+soundBtn.addEventListener("click", async () => {
+  const wasLocked = soundBtn.classList.contains("locked");
+  if (soundOn && !wasLocked) {
+    soundOn = false;
+  } else {
+    soundOn = true;
+    try { await audioCtx().resume(); } catch {}
+    chime(["waiting"]);   // so you hear what it sounds like and how loud
+  }
+  try { localStorage.setItem("sound", soundOn ? "1" : "0"); } catch {}
+  showSound();
+});
+// Any touch on the page unlocks audio that the browser held back after a reload.
+for (const ev of ["pointerdown", "keydown"]) {
+  document.addEventListener(ev, () => {
+    if (soundOn && audio && audio.state === "suspended") audio.resume().catch(() => {});
+  }, true);
+}
+if (soundOn) audioCtx();
+showSound();
+
+// Keep the screen on while the page is visible (Screen Wake Lock, localhost/HTTPS only).
+const canWake = "wakeLock" in navigator;
+let wakeOn = false;
+try { wakeOn = localStorage.getItem("awake") === "1"; } catch {}
+let wakeLock = null;
+const awakeBtn = document.getElementById("awake");
+
+async function holdAwake() {
+  if (!wakeOn || !canWake || wakeLock || document.hidden) return showAwake();
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; showAwake(); });
+  } catch {}
+  showAwake();
+}
+function showAwake() {
+  awakeBtn.setAttribute("aria-pressed", String(wakeOn && !!wakeLock));
+  awakeBtn.title = !canWake ? "Przeglądarka pozwala blokować wygaszanie ekranu tylko na localhost albo przez HTTPS"
+    : wakeOn ? "Ekran nie wygasa, dopóki ta strona jest widoczna. Kliknij, aby wyłączyć"
+    : "Nie wygaszaj ekranu, dopóki ta strona jest widoczna";
+}
+awakeBtn.addEventListener("click", async () => {
+  if (!canWake) { insecureHelp("Blokada wygaszania ekranu"); return; }
+  wakeOn = !wakeOn;
+  try { localStorage.setItem("awake", wakeOn ? "1" : "0"); } catch {}
+  if (wakeOn) await holdAwake();
+  else if (wakeLock) { await wakeLock.release().catch(() => {}); wakeLock = null; }
+  showAwake();
+});
+// The browser drops the lock whenever the page is hidden; take it again on return.
+document.addEventListener("visibilitychange", holdAwake);
+holdAwake();
+
+// Full screen: no browser bars on the tablet.
+const fsBtn = document.getElementById("fullscreen");
+fsBtn.hidden = !document.fullscreenEnabled;
+fsBtn.addEventListener("click", () => {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else document.documentElement.requestFullscreen().catch(() => {});
+});
+document.addEventListener("fullscreenchange", () => {
+  fsBtn.setAttribute("aria-pressed", String(!!document.fullscreenElement));
+});
 
 function alertFor(s, st) {
   // You are looking at the page already.
@@ -701,7 +890,7 @@ function showNotify() {
     : "Włącz powiadomienia, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę";
 }
 notifyBtn.addEventListener("click", async () => {
-  if (!canNotify) { alert(notifyBtn.title + ".\nTa strona jest otwarta pod " + location.host + "."); return; }
+  if (!canNotify) { insecureHelp("Powiadomienia"); return; }
   if (notifyOn && Notification.permission === "granted") {
     notifyOn = false;
   } else {
@@ -716,10 +905,10 @@ notifyBtn.addEventListener("click", async () => {
 showNotify();
 
 // Hidden tabs get their timers throttled down to once a minute; a worker's timers are not,
-// so while notifications are on it keeps the polling (and the alerts) on time.
+// so while notifications or sound are on it keeps the polling (and the alerts) on time.
 try {
   const beat = new Worker(URL.createObjectURL(new Blob(["setInterval(() => postMessage(0), " + REFRESH_MS + ")"], { type: "text/javascript" })));
-  beat.onmessage = () => { if (document.hidden && notifyOn) tick(); };
+  beat.onmessage = () => { if (document.hidden && (notifyOn || soundOn)) tick(); };
 } catch {}
 
 setInterval(paint, 1000);
