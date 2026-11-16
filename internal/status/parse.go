@@ -203,6 +203,24 @@ func (m *openCodeModel) name() string {
 	return s
 }
 
+// openCodeStatus is session.status's {type, message}. Other OpenCode events
+// (workspace.status, shell.exited) send "status" as a bare string; accept that
+// as the type so one of them never makes the whole event unreadable.
+type openCodeStatus struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+func (s *openCodeStatus) UnmarshalJSON(b []byte) error {
+	var str string
+	if json.Unmarshal(b, &str) == nil {
+		*s = openCodeStatus{Type: str}
+		return nil
+	}
+	type plain openCodeStatus
+	return json.Unmarshal(b, (*plain)(s))
+}
+
 // openCodeData is the union of the "data" fields of the OpenCode 2.x events
 // the plugin forwards.
 type openCodeData struct {
@@ -212,11 +230,8 @@ type openCodeData struct {
 	} `json:"location"`
 	Title  string         `json:"title"`
 	Model  *openCodeModel `json:"model"`
-	Status struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"status"`
-	Item struct {
+	Status openCodeStatus `json:"status"`
+	Item   struct {
 		Type    string `json:"type"`
 		Payload struct {
 			Text string `json:"text"`
