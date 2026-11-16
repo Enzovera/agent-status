@@ -25,6 +25,49 @@ type claudePayload struct {
 	LastAssistantMessage string          `json:"last_assistant_message"`
 	PermissionMode       string          `json:"permission_mode"`
 	Model                json.RawMessage `json:"model"`
+
+	Source       string          `json:"source"`  // SessionStart, PostModelSwitch
+	Reason       string          `json:"reason"`  // SessionEnd, PermissionDenied
+	Trigger      string          `json:"trigger"` // PreCompact, PostCompact
+	AgentID      string          `json:"agent_id"`
+	AgentType    string          `json:"agent_type"`
+	TaskID       string          `json:"task_id"`
+	TaskSubject  string          `json:"task_subject"`
+	Error        json.RawMessage `json:"error"` // a string in StopFailure and PostToolUseFailure
+	ErrorDetails string          `json:"error_details"`
+	IsInterrupt  bool            `json:"is_interrupt"`
+	DurationMs   float64         `json:"duration_ms"`
+	ToModel      string          `json:"to_model"`
+}
+
+// rawText reads a field documented as a string but tolerates any other shape,
+// so one unexpected value never makes the whole hook unreadable.
+func rawText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	if t := strings.TrimSpace(string(raw)); t != "null" {
+		return t
+	}
+	return ""
+}
+
+// stopError names StopFailure error types; other types are shown as sent.
+var stopError = map[string]string{
+	"rate_limit":            "limit zapytań",
+	"overloaded":            "przeciążenie API",
+	"authentication_failed": "błąd logowania",
+	"billing_error":         "płatności",
+	"server_error":          "błąd serwera API",
+	"max_output_tokens":     "za długa odpowiedź",
+}
+
+// quotaResume describes the end of a wait for a claude.ai usage limit.
+var quotaResume = map[string]string{
+	"quota_auto_resume_fired":    "limit: wznowiono automatycznie",
+	"quota_auto_resume_stale":    "limit minął: naciśnij Enter, by wznowić",
+	"quota_auto_resume_disabled": "limit: bez automatycznego wznowienia",
 }
 
 // modelName accepts the model as a plain string or as an object with an id.
@@ -51,6 +94,7 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		Agent:     "claude",
 		Host:      host,
 		SessionID: p.SessionID,
+		AgentID:   p.AgentID,
 		Cwd:       p.Cwd,
 		Kind:      p.HookEventName,
 		Task:      clip(p.SessionTitle),
@@ -60,7 +104,10 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 	}
 	switch p.HookEventName {
 	case "SessionStart":
+		// Claude Code runs only command and mcp_tool hooks on SessionStart, so
+		// an http hook never delivers it; parsed for anything that forwards it.
 		ev.State = StateIdle
+		ev.Reason = p.Source
 	case "UserPromptSubmit":
 		ev.State = StateWorking
 		if ev.Task == "" {
@@ -78,19 +125,47 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 			} else {
 				ev.State = StateWaiting
 				ev.Detail = q
+				ev.WaitFor = waitKey(p.AgentID, p.ToolName)
 			}
 		}
+	// PostToolUse and PostToolUseFailure put the tool name in Reason, not in
+	// Tool: Tool counts a call, and PreToolUse already counted this one.
+	case "PostToolUse":
+		// Fires after every successful tool call: nothing to show, only the
+		// duration for the archive.
+		ev.Reason = clip(p.ToolName)
+		ev.DurationMs = int64(p.DurationMs)
+		ev.Resolves = waitKey(p.AgentID, p.ToolName)
+	case "PostToolUseFailure":
+		ev.Reason = clip(p.ToolName)
+		ev.DurationMs = int64(p.DurationMs)
+		ev.Failed = true
+		ev.Resolves = waitKey(p.AgentID, p.ToolName)
+		if p.IsInterrupt {
+			ev.ErrorKind = "interrupt"
+			ev.Detail = clip("przerwane: " + p.ToolName)
+		} else {
+			ev.Detail = clip("błąd narzędzia: " + p.ToolName + ": " + rawText(p.Error))
+		}
+	case "PermissionDenied":
+		// Auto mode refused a tool call; Claude carries on without it.
+		ev.Reason = clip(p.Reason)
+		ev.Detail = clip("odmowa: " + toolDetail(p.ToolName, p.ToolInput))
 	case "PermissionRequest":
 		ev.State = StateWaiting
+		ev.WaitFor = waitKey(p.AgentID, p.ToolName)
 		// Claude Code asks for "permission" to show a question too; that is
 		// the question, not a permission.
 		if q, _ := userQuestion(p.ToolName, p.ToolInput); q != "" {
 			ev.Detail = q
 			break
 		}
-		ev.Detail = "zgoda: " + toolDetail(p.ToolName, p.ToolInput)
+		// What you approve is the command, not its description; the statistics
+		// group permission requests by it too.
+		ev.Detail = "zgoda: " + permissionDetail(p.ToolName, p.ToolInput)
 		ev.Permission = true
 	case "Notification":
+		ev.Reason = p.NotificationType
 		switch p.NotificationType {
 		case "permission_prompt", "agent_needs_input", "elicitation_dialog", "elicitation_url_dialog":
 			ev.State = StateWaiting
@@ -101,18 +176,63 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		case "idle_prompt":
 			ev.State = StateIdle
 			ev.KeepWaiting = true
+		case "quota_auto_resume_fired", "quota_auto_resume_stale", "quota_auto_resume_disabled":
+			// The wait for a claude.ai usage limit ended. Only text: when the
+			// task really continues, UserPromptSubmit follows.
+			ev.Detail = quotaResume[p.NotificationType]
+			ev.KeepWaiting = true
 		}
+	case "SubagentStart":
+		ev.Subagent = clip(p.AgentType)
+		ev.SubagentID = p.AgentID
+		ev.SubagentStarted = true
+		ev.Detail = clip(strings.TrimSpace("podagent: " + p.AgentType))
+	case "SubagentStop":
+		// Also fires for Claude Code's internal agents (prompt suggestions,
+		// /btw) that never sent SubagentStart; stopping an unknown id is a no-op.
+		ev.Subagent = clip(p.AgentType)
+		ev.SubagentID = p.AgentID
+		ev.SubagentStopped = true
+	case "TaskCreated":
+		ev.TodoID = p.TaskID
+		ev.Todo = clip(p.TaskSubject)
+	case "TaskCompleted":
+		ev.TodoID = p.TaskID
+		ev.Todo = clip(p.TaskSubject)
+		ev.TodoDone = true
+		ev.Detail = clip("zrobione: " + p.TaskSubject)
+	case "PreCompact":
+		ev.Reason = p.Trigger
+		ev.Detail = "kompaktuje kontekst"
+		if p.Trigger == "auto" {
+			ev.Detail += " (auto)"
+		}
+	case "PostCompact":
+		ev.Reason = p.Trigger
+		ev.Detail = "kontekst skompaktowany"
+		ev.Compacted = true
+	case "PostModelSwitch":
+		ev.Model = clip(p.ToModel)
+		ev.Reason = p.Source
 	case "Stop":
 		ev.State = StateIdle
 		ev.Detail = clip(p.LastAssistantMessage)
 		ev.Message = clipLong(p.LastAssistantMessage)
 		ev.EndsTurn = true
 	case "StopFailure":
+		// error is the type (rate_limit…), error_details the API's own words and
+		// last_assistant_message the error line shown in the conversation.
 		ev.State = StateError
-		ev.Detail = clip(p.Message)
-		ev.Message = clipLong(p.Message)
+		ev.ErrorKind = clip(rawText(p.Error))
+		ev.Detail = "błąd: " + firstNonEmpty(stopError[ev.ErrorKind], ev.ErrorKind, "API")
+		if d := firstNonEmpty(p.ErrorDetails, p.LastAssistantMessage); d != "" {
+			ev.Detail += " — " + d
+		}
+		ev.Detail = clip(ev.Detail)
+		ev.Message = clipLong(firstNonEmpty(p.LastAssistantMessage, p.ErrorDetails))
 	case "SessionEnd":
 		ev.State = StateEnded
+		ev.Reason = p.Reason
 	}
 	return ev, nil
 }
@@ -146,6 +266,29 @@ func userQuestion(tool string, raw json.RawMessage) (q string, deferred bool) {
 		return clip(strings.TrimSpace("propozycja sesji: " + in.Title)), false
 	}
 	return "", false
+}
+
+// waitKey names the tool call a session waits on: which agent (empty for the
+// main thread, else the subagent's id) and which tool. The tool's completion
+// with the same key ends the wait, while a background subagent's tools don't.
+func waitKey(agentID, tool string) string {
+	if tool == "" {
+		return ""
+	}
+	return agentID + "|" + tool
+}
+
+// permissionDetail is toolDetail with a shell command shown as the command
+// itself rather than its description.
+func permissionDetail(name string, raw json.RawMessage) string {
+	var in struct {
+		Command string `json:"command"`
+	}
+	_ = json.Unmarshal(raw, &in)
+	if c := strings.TrimSpace(in.Command); c != "" {
+		return clip(name + ": " + c)
+	}
+	return toolDetail(name, raw)
 }
 
 func toolDetail(name string, raw json.RawMessage) string {

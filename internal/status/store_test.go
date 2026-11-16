@@ -344,3 +344,224 @@ func TestStoreQuestionNotPermission(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreSubagents(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	ev := func(min int, e Event) {
+		e.Agent, e.Host, e.SessionID, e.At = "claude", "pc1", "a", t0.Add(time.Duration(min)*time.Minute)
+		s.Apply(e)
+	}
+	start := func(id, typ string) Event {
+		return Event{Kind: "SubagentStart", Subagent: typ, SubagentID: id, SubagentStarted: true, Detail: "podagent: " + typ}
+	}
+	stop := func(id string) Event { return Event{Kind: "SubagentStop", SubagentID: id, SubagentStopped: true} }
+
+	ev(0, Event{Kind: "UserPromptSubmit", State: StateWorking, Prompt: "x"})
+	ev(1, start("a1", "Explore"))
+	ev(2, start("a2", "Plan"))
+	ev(3, start("a1", "Explore")) // resumed: neither listed nor counted twice
+	ev(4, stop("unknown"))        // internal agents stop without a start
+	sess := s.List(t0.Add(5 * time.Minute))[0]
+	if sess.SubagentRuns != 2 || len(sess.Subagents) != 2 || sess.Subagents[0] != (Subagent{ID: "a1", Type: "Explore", Since: t0.Add(time.Minute)}) {
+		t.Fatalf("runs=%d running=%+v", sess.SubagentRuns, sess.Subagents)
+	}
+	if sess.State != StateWorking || sess.Detail != "podagent: Explore" {
+		t.Errorf("state=%q detail=%q", sess.State, sess.Detail)
+	}
+
+	// The returned copy must not share memory with the store.
+	sess.Subagents[0].Type = "x"
+	if s.List(t0.Add(5 * time.Minute))[0].Subagents[0].Type != "Explore" {
+		t.Error("List leaks subagents")
+	}
+
+	ev(6, stop("a1"))
+	sess = s.List(t0.Add(7 * time.Minute))[0]
+	if len(sess.Subagents) != 1 || sess.Subagents[0].ID != "a2" || sess.SubagentRuns != 2 {
+		t.Errorf("after stop: runs=%d running=%+v", sess.SubagentRuns, sess.Subagents)
+	}
+
+	// A stop that never arrives stops mattering after subagentFor.
+	if got := s.List(t0.Add(2*time.Minute + subagentFor + time.Second))[0].Subagents; len(got) != 0 {
+		t.Errorf("expired subagent still listed: %+v", got)
+	}
+
+	ev(8, start("a3", "general-purpose"))
+	ev(9, Event{Kind: "SessionEnd", State: StateEnded})
+	sess = s.List(t0.Add(10 * time.Minute))[0]
+	if len(sess.Subagents) != 0 || sess.SubagentRuns != 3 {
+		t.Errorf("after end: runs=%d running=%+v", sess.SubagentRuns, sess.Subagents)
+	}
+}
+
+func TestStoreTodos(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	ev := func(e Event) {
+		e.Agent, e.Host, e.SessionID, e.At = "claude", "pc1", "a", t0
+		s.Apply(e)
+	}
+	created := func(id string) Event { return Event{Kind: "TaskCreated", TodoID: id, Todo: "t" + id} }
+	done := func(id string) Event {
+		return Event{Kind: "TaskCompleted", TodoID: id, Todo: "t" + id, TodoDone: true, Detail: "zrobione: t" + id}
+	}
+	ev(created("1"))
+	ev(created("2"))
+	ev(created("1")) // repeat
+	ev(done("1"))
+	ev(done("1")) // repeat
+	ev(done("3")) // creation not seen: counts as created too
+	sess := s.List(t0)[0]
+	if sess.TodosTotal != 3 || sess.TodosDone != 2 {
+		t.Errorf("todos %d/%d, want 2 of 3", sess.TodosDone, sess.TodosTotal)
+	}
+	sess.TodoIDs["2"] = true
+	if s.List(t0)[0].TodoIDs["2"] {
+		t.Error("List leaks todo ids")
+	}
+}
+
+func TestStoreCountersAndQuietEvents(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	ev := func(sec int, e Event) Record {
+		e.Agent, e.Host, e.SessionID, e.At = "claude", "pc1", "a", t0.Add(time.Duration(sec)*time.Second)
+		rec, _ := s.Apply(e)
+		return rec
+	}
+	ev(0, Event{Kind: "UserPromptSubmit", State: StateWorking, Prompt: "x"})
+	ev(1, Event{Kind: "PreToolUse", State: StateWorking, Detail: "Bash: go test", Tool: "Bash"})
+	before := s.List(t0.Add(time.Minute))[0]
+
+	// PostToolUse comes after every tool call: it must not touch what is shown.
+	rec := ev(2, Event{Kind: "PostToolUse", Reason: "Bash", DurationMs: 812})
+	sess := s.List(t0.Add(time.Minute))[0]
+	if sess.Detail != "Bash: go test" || len(sess.History) != len(before.History) || sess.ToolCalls != 1 || sess.State != StateWorking {
+		t.Errorf("PostToolUse changed the session: %+v", sess)
+	}
+	if rec.Kind != "PostToolUse" || rec.Reason != "Bash" || rec.DurationMs != 812 || rec.Tool != "" || rec.State != StateWorking || rec.Prev != StateWorking {
+		t.Errorf("PostToolUse record: %+v", rec)
+	}
+
+	rec = ev(3, Event{Kind: "PostToolUseFailure", Reason: "Bash", DurationMs: 40, Failed: true, Detail: "błąd narzędzia: Bash: Exit code 1"})
+	if !rec.Failed || rec.DurationMs != 40 || rec.Reason != "Bash" {
+		t.Errorf("failure record: %+v", rec)
+	}
+	ev(4, Event{Kind: "PostToolUseFailure", Reason: "Bash", Failed: true, ErrorKind: "interrupt", Detail: "przerwane: Bash"})
+	ev(5, Event{Kind: "PreCompact", Reason: "auto", Detail: "kompaktuje kontekst (auto)"})
+	rec = ev(6, Event{Kind: "PostCompact", Reason: "auto", Detail: "kontekst skompaktowany", Compacted: true})
+	if rec.Reason != "auto" || rec.Detail != "kontekst skompaktowany" {
+		t.Errorf("compaction record: %+v", rec)
+	}
+	ev(7, Event{Kind: "PostCompact", Reason: "manual", Detail: "kontekst skompaktowany", Compacted: true})
+	rec = ev(8, Event{Kind: "SubagentStart", Subagent: "Explore", SubagentID: "x1", SubagentStarted: true, Detail: "podagent: Explore"})
+	if rec.Subagent != "Explore" {
+		t.Errorf("subagent record: %+v", rec)
+	}
+	rec = ev(9, Event{Kind: "TaskCompleted", TodoID: "7", Todo: "Auth", TodoDone: true, Detail: "zrobione: Auth"})
+	if rec.TodoID != "7" || rec.Todo != "Auth" {
+		t.Errorf("todo record: %+v", rec)
+	}
+
+	sess = s.List(t0.Add(time.Minute))[0]
+	if sess.ToolFailures != 2 || sess.Compactions != 2 || sess.State != StateWorking || sess.Detail != "zrobione: Auth" {
+		t.Errorf("failures=%d compactions=%d state=%q detail=%q", sess.ToolFailures, sess.Compactions, sess.State, sess.Detail)
+	}
+
+	rec = ev(10, Event{Kind: "StopFailure", State: StateError, ErrorKind: "rate_limit", Detail: "błąd: limit zapytań"})
+	if rec.ErrorKind != "rate_limit" || rec.State != StateError || rec.Prev != StateWorking {
+		t.Errorf("stop failure record: %+v", rec)
+	}
+	rec = ev(11, Event{Kind: "SessionEnd", State: StateEnded, Reason: "other"})
+	if rec.Reason != "other" {
+		t.Errorf("session end record: %+v", rec)
+	}
+}
+
+func TestStoreSideNotesKeepQuestion(t *testing.T) {
+	t0 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	ev := func(e Event) {
+		e.Agent, e.Host, e.SessionID, e.At = "claude", "pc1", "a", t0
+		s.Apply(e)
+	}
+	ev(Event{Kind: "PermissionRequest", State: StateWaiting, Detail: "zgoda: Bash: rm", Permission: true})
+	ev(Event{Kind: "SubagentStart", Subagent: "Explore", SubagentID: "x", SubagentStarted: true, Detail: "podagent: Explore"})
+	sess := s.List(t0)[0]
+	if sess.State != StateWaiting || sess.Detail != "zgoda: Bash: rm" {
+		t.Errorf("state=%q detail=%q", sess.State, sess.Detail)
+	}
+	if h := sess.History[len(sess.History)-1]; h.Detail != "podagent: Explore" {
+		t.Errorf("side note missing from history: %+v", h)
+	}
+}
+
+func TestStoreNewCountersPersist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	t0 := time.Now()
+	s, _ := NewStore(path)
+	s.Apply(Event{Agent: "claude", Host: "h", SessionID: "x", Kind: "SubagentStart", Subagent: "Plan", SubagentID: "p1", SubagentStarted: true, At: t0})
+	s.Apply(Event{Agent: "claude", Host: "h", SessionID: "x", Kind: "TaskCreated", TodoID: "1", At: t0})
+	s.Apply(Event{Agent: "claude", Host: "h", SessionID: "x", Kind: "PostCompact", Compacted: true, At: t0})
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	for _, k := range []string{`"subagents"`, `"subagentRuns": 1`, `"compactions": 1`, `"toolFailures": 0`, `"todosTotal": 1`, `"todosDone": 0`} {
+		if !strings.Contains(string(b), k) {
+			t.Errorf("state file lacks %s", k)
+		}
+	}
+	s2, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2.Apply(Event{Agent: "claude", Host: "h", SessionID: "x", Kind: "TaskCreated", TodoID: "1", At: t0})
+	got := s2.List(t0)[0]
+	if got.SubagentRuns != 1 || len(got.Subagents) != 1 || got.Compactions != 1 || got.TodosTotal != 1 {
+		t.Errorf("after reload: %+v", got)
+	}
+}
+
+// Claude Code sends nothing when you approve a permission; the end of the same
+// tool call is what ends the wait. A background subagent's tool must not.
+func TestPermissionWaitEndsWithItsTool(t *testing.T) {
+	t0 := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	post := func(body string, at time.Time) {
+		ev, err := ParseClaude("pc", []byte(body), at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Apply(ev)
+	}
+	state := func() Session { return s.List(t0.Add(time.Hour))[0] }
+
+	post(`{"session_id":"a","hook_event_name":"UserPromptSubmit","prompt":"x"}`, t0)
+	post(`{"session_id":"a","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"npm test","description":"Run tests"}}`, t0.Add(time.Second))
+	if st := state(); st.State != StateWaiting || st.Detail != "zgoda: Bash: npm test" {
+		t.Fatalf("after permission request: %s %q", st.State, st.Detail)
+	}
+	// A subagent's Bash and the main thread's Read finish meanwhile: still waiting.
+	post(`{"session_id":"a","hook_event_name":"PostToolUse","tool_name":"Bash","agent_id":"sub1","duration_ms":5}`, t0.Add(2*time.Second))
+	post(`{"session_id":"a","hook_event_name":"PostToolUse","tool_name":"Read","duration_ms":5}`, t0.Add(3*time.Second))
+	post(`{"session_id":"a","hook_event_name":"PreToolUse","tool_name":"Grep","agent_id":"sub1","tool_input":{"pattern":"x"}}`, t0.Add(4*time.Second))
+	if st := state(); st.State != StateWaiting {
+		t.Fatalf("other tools must not end the wait: %s", st.State)
+	}
+	post(`{"session_id":"a","hook_event_name":"PostToolUse","tool_name":"Bash","duration_ms":2000}`, t0.Add(10*time.Second))
+	if st := state(); st.State != StateWorking || st.WaitFor != "" {
+		t.Fatalf("approved tool finished: %s %q", st.State, st.WaitFor)
+	}
+
+	// A question asked with AskUserQuestion ends when the tool returns the answer.
+	post(`{"session_id":"a","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"A czy B?"}]}}`, t0.Add(20*time.Second))
+	if st := state(); st.State != StateWaiting {
+		t.Fatalf("question: %s", st.State)
+	}
+	post(`{"session_id":"a","hook_event_name":"PostToolUse","tool_name":"AskUserQuestion","duration_ms":9000}`, t0.Add(30*time.Second))
+	if st := state(); st.State != StateWorking {
+		t.Fatalf("answered question: %s", st.State)
+	}
+}

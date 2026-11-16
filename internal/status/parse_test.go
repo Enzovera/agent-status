@@ -30,9 +30,27 @@ func TestParseClaude(t *testing.T) {
 		{"idle prompt", `{"session_id":"s1","hook_event_name":"Notification","notification_type":"idle_prompt","message":"waiting"}`, StateIdle, "", ""},
 		{"other notification", `{"session_id":"s1","hook_event_name":"Notification","notification_type":"auth_success"}`, "", "", ""},
 		{"stop", `{"session_id":"s1","hook_event_name":"Stop","last_assistant_message":"Gotowe."}`, StateIdle, "", "Gotowe."},
-		{"stop failure", `{"session_id":"s1","hook_event_name":"StopFailure","message":"rate limit"}`, StateError, "", "rate limit"},
+		{"stop failure", `{"session_id":"s1","hook_event_name":"StopFailure","error":"rate_limit","error_details":"429 Too Many Requests","last_assistant_message":"API Error: Rate limit reached"}`, StateError, "", "błąd: limit zapytań — 429 Too Many Requests"},
+		{"stop failure without details", `{"session_id":"s1","hook_event_name":"StopFailure","error":"overloaded","last_assistant_message":"API Error: Overloaded"}`, StateError, "", "błąd: przeciążenie API — API Error: Overloaded"},
+		{"stop failure unnamed type", `{"session_id":"s1","hook_event_name":"StopFailure","error":"model_not_found"}`, StateError, "", "błąd: model_not_found"},
+		{"stop failure without error", `{"session_id":"s1","hook_event_name":"StopFailure"}`, StateError, "", "błąd: API"},
 		{"end", `{"session_id":"s1","hook_event_name":"SessionEnd","reason":"other"}`, StateEnded, "", ""},
-		{"unknown", `{"session_id":"s1","hook_event_name":"PostCompact"}`, "", "", ""},
+		{"post tool", `{"session_id":"s1","hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"/a.txt","content":"x"},"tool_response":{"filePath":"/a.txt","type":"create"},"tool_use_id":"toolu_1","duration_ms":12}`, "", "", ""},
+		{"tool failure", `{"session_id":"s1","hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_input":{"command":"npm test"},"tool_use_id":"toolu_1","error":"Exit code 1\nError: Cannot find module 'express'","is_interrupt":false,"duration_ms":4187}`, "", "", "błąd narzędzia: Bash: Exit code 1 Error: Cannot find module 'express'"},
+		{"tool interrupted", `{"session_id":"s1","hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"aborted","is_interrupt":true}`, "", "", "przerwane: Bash"},
+		{"permission denied", `{"session_id":"s1","permission_mode":"auto","hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/build","description":"Clean build directory"},"tool_use_id":"toolu_1","reason":"[Irreversible Local Destruction]"}`, "", "", "odmowa: Bash: Clean build directory"},
+		{"subagent start", `{"session_id":"s1","hook_event_name":"SubagentStart","agent_id":"agent-abc123","agent_type":"Explore"}`, "", "", "podagent: Explore"},
+		{"subagent stop", `{"session_id":"s1","hook_event_name":"SubagentStop","stop_hook_active":false,"agent_id":"def456","agent_type":"Explore","last_assistant_message":"Analysis complete.","background_tasks":[],"session_crons":[]}`, "", "", ""},
+		{"task created", `{"session_id":"s1","hook_event_name":"TaskCreated","task_id":"task-001","task_subject":"Implement user authentication","task_description":"Add login"}`, "", "", ""},
+		{"task completed", `{"session_id":"s1","hook_event_name":"TaskCompleted","task_id":"task-001","task_subject":"Implement user authentication"}`, "", "", "zrobione: Implement user authentication"},
+		{"pre compact manual", `{"session_id":"s1","hook_event_name":"PreCompact","trigger":"manual","custom_instructions":null}`, "", "", "kompaktuje kontekst"},
+		{"pre compact auto", `{"session_id":"s1","hook_event_name":"PreCompact","trigger":"auto","custom_instructions":null}`, "", "", "kompaktuje kontekst (auto)"},
+		{"post compact", `{"session_id":"s1","hook_event_name":"PostCompact","trigger":"manual","compact_summary":"Summary..."}`, "", "", "kontekst skompaktowany"},
+		{"model switch", `{"session_id":"s1","hook_event_name":"PostModelSwitch","from_model":"claude-sonnet-5","to_model":"claude-opus-5","requested_model":null,"source":"auto"}`, "", "", ""},
+		{"quota resumed", `{"session_id":"s1","hook_event_name":"Notification","notification_type":"quota_auto_resume_fired","message":"Resuming"}`, "", "", "limit: wznowiono automatycznie"},
+		{"quota stale", `{"session_id":"s1","hook_event_name":"Notification","notification_type":"quota_auto_resume_stale","message":"x"}`, "", "", "limit minął: naciśnij Enter, by wznowić"},
+		{"quota disabled", `{"session_id":"s1","hook_event_name":"Notification","notification_type":"quota_auto_resume_disabled","message":"x"}`, "", "", "limit: bez automatycznego wznowienia"},
+		{"unknown", `{"session_id":"s1","hook_event_name":"PostToolBatch"}`, "", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -47,6 +65,74 @@ func TestParseClaude(t *testing.T) {
 				t.Errorf("identity: %+v", ev)
 			}
 		})
+	}
+}
+
+func TestParseClaudeNewHooks(t *testing.T) {
+	at := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		body string
+		want Event
+	}{
+		{"session start", `{"session_id":"s1","hook_event_name":"SessionStart","source":"resume","model":"claude-opus-5"}`,
+			Event{State: StateIdle, Reason: "resume", Model: "claude-opus-5"}},
+		{"post tool", `{"session_id":"s1","hook_event_name":"PostToolUse","tool_name":"Write","tool_use_id":"toolu_1","duration_ms":12}`,
+			Event{Reason: "Write", DurationMs: 12, Resolves: "|Write"}},
+		{"tool failure", `{"session_id":"s1","hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"Exit code 1","duration_ms":4187.6}`,
+			Event{Reason: "Bash", DurationMs: 4187, Failed: true, Resolves: "|Bash", Detail: "błąd narzędzia: Bash: Exit code 1"}},
+		{"tool interrupted", `{"session_id":"s1","hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"aborted","is_interrupt":true,"duration_ms":5}`,
+			Event{Reason: "Bash", DurationMs: 5, Failed: true, Resolves: "|Bash", ErrorKind: "interrupt", Detail: "przerwane: Bash"}},
+		{"permission denied", `{"session_id":"s1","hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"curl x"},"reason":"[Data Exfiltration]","permission_mode":"auto"}`,
+			Event{Reason: "[Data Exfiltration]", Detail: "odmowa: Bash: curl x", Mode: "auto"}},
+		{"subagent start", `{"session_id":"s1","hook_event_name":"SubagentStart","agent_id":"agent-abc123","agent_type":"Explore"}`,
+			Event{Subagent: "Explore", SubagentID: "agent-abc123", AgentID: "agent-abc123", SubagentStarted: true, Detail: "podagent: Explore"}},
+		{"subagent stop", `{"session_id":"s1","hook_event_name":"SubagentStop","agent_id":"agent-abc123","agent_type":"Explore","last_assistant_message":"done"}`,
+			Event{Subagent: "Explore", SubagentID: "agent-abc123", AgentID: "agent-abc123", SubagentStopped: true}},
+		{"task created", `{"session_id":"s1","hook_event_name":"TaskCreated","task_id":"task-001","task_subject":"Auth"}`,
+			Event{TodoID: "task-001", Todo: "Auth"}},
+		{"task completed", `{"session_id":"s1","hook_event_name":"TaskCompleted","task_id":"task-001","task_subject":"Auth"}`,
+			Event{TodoID: "task-001", Todo: "Auth", TodoDone: true, Detail: "zrobione: Auth"}},
+		{"pre compact", `{"session_id":"s1","hook_event_name":"PreCompact","trigger":"auto","custom_instructions":null}`,
+			Event{Reason: "auto", Detail: "kompaktuje kontekst (auto)"}},
+		{"post compact", `{"session_id":"s1","hook_event_name":"PostCompact","trigger":"manual","compact_summary":"s"}`,
+			Event{Reason: "manual", Detail: "kontekst skompaktowany", Compacted: true}},
+		{"model switch", `{"session_id":"s1","hook_event_name":"PostModelSwitch","from_model":"claude-sonnet-5","to_model":"claude-opus-5","requested_model":"opus","source":"command"}`,
+			Event{Model: "claude-opus-5", Reason: "command"}},
+		{"stop failure", `{"session_id":"s1","hook_event_name":"StopFailure","error":"rate_limit","error_details":"429 Too Many Requests","last_assistant_message":"API Error: Rate limit reached"}`,
+			Event{State: StateError, ErrorKind: "rate_limit", Detail: "błąd: limit zapytań — 429 Too Many Requests", Message: "API Error: Rate limit reached"}},
+		{"session end", `{"session_id":"s1","hook_event_name":"SessionEnd","reason":"prompt_input_exit"}`,
+			Event{State: StateEnded, Reason: "prompt_input_exit"}},
+		{"notification", `{"session_id":"s1","hook_event_name":"Notification","notification_type":"quota_auto_resume_fired","message":"m"}`,
+			Event{Reason: "quota_auto_resume_fired", Detail: "limit: wznowiono automatycznie", KeepWaiting: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ev, err := ParseClaude("pc1", []byte(tt.body), at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ev.Tool != "" {
+				t.Errorf("Tool = %q; only PreToolUse may count a tool call", ev.Tool)
+			}
+			want := tt.want
+			want.Agent, want.Host, want.SessionID, want.At = "claude", "pc1", "s1", at
+			want.Kind = ev.Kind
+			if ev != want {
+				t.Errorf("got  %+v\nwant %+v", ev, want)
+			}
+		})
+	}
+}
+
+func TestParseClaudeOddShapes(t *testing.T) {
+	// An error that is not a string must not make the hook unreadable.
+	ev, err := ParseClaude("pc1", []byte(`{"session_id":"s1","hook_event_name":"PostToolUseFailure","tool_name":"mcp__x__y","error":{"code":1}}`), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Detail != `błąd narzędzia: mcp__x__y: {"code":1}` {
+		t.Errorf("detail = %q", ev.Detail)
 	}
 }
 

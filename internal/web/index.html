@@ -111,6 +111,19 @@
   .cap { min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cap .detail { font: 12px var(--mono); color: var(--muted); margin-left: 10px; }
   .cap .detail:first-child { margin-left: 0; }
+  .machines { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: -4px 0 12px; font-size: 13px; }
+  .machines span { white-space: nowrap; }
+  .machines small, .host-state small { color: var(--muted); font-size: 12px; }
+  .dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
+  .dot.off { background: transparent; border: 1.5px solid var(--warn); }
+  .machines .off-name { color: var(--warn); }
+  .host-state { font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 10px; font-size: 12px; }
+  .cap .chip { display: inline-block; margin-right: 8px; padding: 0 5px; border: 1px solid var(--line); font-size: 12px; color: var(--muted); background: var(--panel); }
+  .state small[data-pre] { font-weight: 600; }
+  .state.waiting small { color: var(--signal); }
+  h1 a { color: inherit; text-decoration: none; }
+  .nav { font: 400 14px var(--sans); color: var(--muted); margin-left: 12px; }
+  .nav:hover { color: var(--text); }
   .row.waiting .cap { white-space: normal; overflow-wrap: anywhere; }
   .row.waiting .cap .detail { display: block; margin: 2px 0 0; font: 600 14px/1.35 var(--sans); color: var(--signal); }
   .row.open .cap { white-space: normal; overflow-wrap: anywhere; }
@@ -178,7 +191,7 @@
 </head>
 <body>
 <header>
-  <h1>Agenci</h1>
+  <h1>Agenci <a class="nav" href="/stats">statystyki →</a></h1>
   <div class="bar">
     <div class="group" role="group" aria-label="Układ listy">
       <button type="button" data-group="host" title="Sesje pogrupowane według maszyny">maszyna</button>
@@ -205,6 +218,7 @@
   </div>
 </header>
 <button type="button" id="beacon" class="beacon" hidden></button>
+<div id="machines" class="machines" hidden></div>
 <div class="legend" aria-hidden="true">
   <span><i class="s-waiting"></i>czeka na Ciebie</span>
   <span><i class="s-working"></i>pracuje</span>
@@ -318,7 +332,14 @@ function details(s, now) {
   if (s.prompts) counts.push(s.prompts + " " + plural(s.prompts, "polecenie", "polecenia", "poleceń"));
   if (s.toolCalls) counts.push(s.toolCalls + " " + plural(s.toolCalls, "narzędzie", "narzędzia", "narzędzi"));
   if (s.permissions) counts.push(s.permissions + " " + plural(s.permissions, "prośba o zgodę", "prośby o zgodę", "próśb o zgodę"));
+  if (s.toolFailures) counts.push(s.toolFailures + " " + plural(s.toolFailures, "błąd narzędzia", "błędy narzędzi", "błędów narzędzi"));
+  if (s.subagentRuns) counts.push(s.subagentRuns + " " + plural(s.subagentRuns, "podagent", "podagenty", "podagentów"));
+  if (s.compactions) counts.push(s.compactions + " " + plural(s.compactions, "kompaktowanie", "kompaktowania", "kompaktowań"));
   item("Aktywność", counts.join(" · "));
+  if (s.todosTotal) item("Zadania", (s.todosDone || 0) + " z " + s.todosTotal + " zrobione");
+  if (s.subagents && s.subagents.length) {
+    item("Podagenci teraz", s.subagents.map(a => (a.type || "podagent") + " (od " + ago(a.since, now) + ")").join(", "));
+  }
   box.append(dl);
 
   const block = (title, node) => { box.append(el("h3", null, title), node); };
@@ -494,8 +515,10 @@ function row(s, now) {
 
   const trk = el("div", "trk");
   trk.append(strip(s, now));
-  if (s.task || s.detail) {
+  const chips = rowChips(s, now);
+  if (s.task || s.detail || chips.length) {
     const cap = el("div", "cap");
+    cap.append(...chips);
     if (s.task) cap.append(el("span", "task", s.task));
     if (s.detail) cap.append(el("span", "detail", s.detail));
     trk.append(cap);
@@ -503,9 +526,9 @@ function row(s, now) {
 
   const st = el("div", "state " + cls, SHORT[cls] || cls);
   st.title = LABEL[cls] || cls;
-  const age = el("small", null, ago(s.updatedAt, now) + " temu");
-  age.dataset.at = s.updatedAt;   // ticked in place by paint() between data changes
-  st.append(age);
+  // Waiting, failed or done: how long it has been like that. Working: when it last reported,
+  // which is what tells a busy session from a silent one.
+  st.append(SINCE[cls] ? ageEl("small", since(s), now, "od ") : ageEl("small", s.updatedAt, now, "", " temu"));
 
   head.append(who, trk, st);
   r.append(head);
@@ -513,14 +536,48 @@ function row(s, now) {
   return r;
 }
 
+// States whose row shows "since when" rather than "last signal".
+const SINCE = { waiting: true, error: true, idle: true };
+
+// When the session entered its current state: the last state change on its timeline.
+function since(s) {
+  const tl = s.timeline;
+  return tl && tl.length && tl[tl.length - 1].state === s.state ? tl[tl.length - 1].at : s.updatedAt;
+}
+
+// A time that paint() keeps counting between data changes: pre + "7 min" + post.
+function ageEl(tag, at, now, pre, post) {
+  const e = el(tag, null, (pre || "") + ago(at, now) + (post || ""));
+  e.dataset.at = at;
+  if (pre) e.dataset.pre = pre;
+  if (post) e.dataset.post = post;
+  return e;
+}
+
+// Small labels in front of the caption: running subagents and task-list progress.
+function rowChips(s, now) {
+  const out = [];
+  const subs = s.subagents || [];
+  if (subs.length) {
+    const c = el("span", "chip", subs.length + " " + plural(subs.length, "podagent", "podagenty", "podagentów"));
+    c.title = subs.map(a => (a.type || "podagent") + " · od " + ago(a.since, now)).join("\n");
+    out.push(c);
+  }
+  if (s.todosTotal) out.push(el("span", "chip", "zadania " + (s.todosDone || 0) + "/" + s.todosTotal));
+  return out;
+}
+
 // host: set when the section is one machine, so its name can be changed from the header.
-function section(name, count, list, now, cls, host) {
+// longestFirst: order by how long the sessions have been in their state (the waiting lane).
+function section(name, count, list, now, cls, host, longestFirst) {
   const sec = el("section", cls);
   const h = el("h2", "lanes");
   const n = el("span", "name", name);
   n.append(el("small", null, count));
   if (host != null) {
     if (hostNames[host]) n.title = host;
+    const m = machines.get(host);
+    if (m) n.append(machineState(m, now, "host-state"));
     const ren = el("button", "rename", "zmień nazwę");
     ren.type = "button";
     ren.dataset.rename = host;
@@ -530,15 +587,48 @@ function section(name, count, list, now, cls, host) {
   h.append(n, ticks(), el("span"));
   sec.append(h);
   // Fixed order (newest session first) so rows don't swap places whenever an agent reports.
-  for (const s of [...list].sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.key.localeCompare(b.key))) {
+  // The waiting lane goes by who has waited longest; that order only changes when one stops waiting.
+  const order = longestFirst
+    ? (a, b) => since(a).localeCompare(since(b)) || a.key.localeCompare(b.key)
+    : (a, b) => b.startedAt.localeCompare(a.startedAt) || a.key.localeCompare(b.key);
+  for (const s of [...list].sort(order)) {
     sec.append(row(s, now));
   }
   return sec;
 }
 
+// Machines that send a heartbeat (installer adds it), keyed by the name agents report.
+let machines = new Map();
+
+// "● online od 3 h" / "○ offline od 12 min": the dot is the state, the time says since when.
+function machineState(m, now, cls) {
+  const sp = el("span", cls);
+  sp.append(el("i", "dot" + (m.online ? "" : " off")));
+  sp.append(m.online ? "online " : "offline ");
+  sp.append(ageEl("small", m.online ? m.firstBeat : m.lastBeat, now, "od "));
+  sp.title = (m.online ? "Wysyła sygnał życia" : "Brak sygnału życia od " + clock(m.lastBeat)) + (m.ip ? " · " + m.ip : "");
+  return sp;
+}
+
+// One line with every machine: offline ones first, they are the news.
+function renderMachines(now) {
+  const box = document.getElementById("machines");
+  const list = [...machines.values()].sort((a, b) => a.online - b.online || hostLabel(a.host).localeCompare(hostLabel(b.host)));
+  box.hidden = list.length === 0;
+  box.replaceChildren();
+  for (const m of list) {
+    const sp = el("span");
+    sp.append(el("i", "dot" + (m.online ? "" : " off")), el("span", m.online ? null : "off-name", hostLabel(m.host) + " "));
+    sp.append(m.online ? el("small", null, "online") : ageEl("small", m.lastBeat, now, "offline od "));
+    sp.title = m.ip || "";
+    box.append(sp);
+  }
+}
+
 function render(data) {
   if (!showEnded) data = { ...data, sessions: data.sessions.filter(s => s.state !== "ended") };
   hostNames = data.hostNames || {};
+  machines = new Map((data.machines || []).map(m => [m.host, m]));
   const now = new Date(data.now).getTime();
   const hosts = document.getElementById("hosts");
   hosts.replaceChildren();
@@ -549,7 +639,7 @@ function render(data) {
   if (groupBy === "queue") {
     for (const lane of LANES) {
       const list = data.sessions.filter(lane.has);
-      if (list.length) hosts.append(section(lane.title, String(list.length), list, now, "q-" + lane.id));
+      if (list.length) hosts.append(section(lane.title, String(list.length), list, now, "q-" + lane.id, null, lane.id === "waiting"));
     }
   } else {
     const byProject = groupBy === "project";
@@ -574,6 +664,7 @@ function render(data) {
   const w = el("b", waiting ? "signal" : null, String(waiting));
   summary.append(w, " czeka · ", el("b", null, String(working)), " pracuje");
   document.title = waiting ? `(${waiting}) Agenci` : "Agenci";
+  renderMachines(now);
   alarm(data.sessions);
 }
 
@@ -588,12 +679,17 @@ function alarm(sessions) {
   b.hidden = list.length === 0;
   if (!list.length) return;
   const n = list.length;
+  const now = lastData ? new Date(lastData.now).getTime() + (Date.now() - lastFetch) : Date.now();
   b.className = "beacon" + (waiting.length ? "" : " check");
-  b.replaceChildren(
-    n + " " + (waiting.length ? plural(n, "sesja czeka", "sesje czekają", "sesji czeka") + " na Ciebie"
-      : plural(n, "sesja", "sesje", "sesji") + " do sprawdzenia"),
-    el("small", null, list.map(s => (s.project || s.sessionId.slice(0, 8)) + " (" + hostLabel(s.host) + ")").join(" · ")),
-  );
+  const head = el("span", null, n + " " + (waiting.length ? plural(n, "sesja czeka", "sesje czekają", "sesji czeka") + " na Ciebie"
+    : plural(n, "sesja", "sesje", "sesji") + " do sprawdzenia"));
+  if (waiting.length) {
+    const oldest = waiting.map(since).sort()[0];
+    head.append(" · ", ageEl("span", oldest, now, "najdłużej od "));
+  }
+  const names = [...list].sort((a, c) => since(a).localeCompare(since(c)))
+    .map(s => (s.project || s.sessionId.slice(0, 8)) + " (" + hostLabel(s.host) + ")");
+  b.replaceChildren(head, el("small", null, names.join(" · ")));
   b.title = "Pokaż kolejkę";
 }
 document.getElementById("beacon").addEventListener("click", () => {
@@ -617,7 +713,7 @@ function paint() {
   // Shift the server's "now" by the time elapsed since the fetch, so ages stay live between polls.
   const elapsed = Date.now() - lastFetch;
   const now = new Date(new Date(lastData.now).getTime() + elapsed);
-  const sig = JSON.stringify([lastData.sessions, lastData.hostNames, groupBy, range, showEnded, [...expanded]]);
+  const sig = JSON.stringify([lastData.sessions, lastData.hostNames, lastData.machines, groupBy, range, showEnded, [...expanded]]);
   const sel = window.getSelection();
   // Re-rendering would drop a text selection, so it waits while someone copies text from the
   // open details (paths, prompts). A stray selection in a row (double-click) never blocks it,
@@ -635,8 +731,8 @@ function paint() {
     }
   } else {
     // Nothing changed: only tick the ages and slide the strips, leaving the DOM (hover, focus, selection) alone.
-    for (const e of hostsEl.querySelectorAll("[data-at]")) {
-      e.textContent = ago(e.dataset.at, now) + " temu";
+    for (const e of document.querySelectorAll("#hosts [data-at], #beacon [data-at], #machines [data-at]")) {
+      e.textContent = (e.dataset.pre || "") + ago(e.dataset.at, now) + (e.dataset.post || "");
     }
     for (const i of hostsEl.querySelectorAll(".strip i[data-a]")) place(i, now.getTime());
   }

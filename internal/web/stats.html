@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Statystyki agentów</title>
+<style>
+  /* Same tokens as the status page (index.html). */
+  :root {
+    --bg: #f2f3f1; --panel: #fbfbfa; --line: #d6d8d3; --grid: #e6e8e3; --text: #1a1c19; --muted: #686d66;
+    --signal: #d0401f; --signal-soft: #fbe7e1; --ok: #3c8a5a; --warn: #b07405; --warn-soft: #f8efdc;
+    --idle: #c4c8c1; --ended: #e0e2dd; --on-signal: #fff;
+    --sans: "Archivo", "Segoe UI", system-ui, sans-serif;
+    --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131513; --panel: #1a1c1a; --line: #2e322e; --grid: #242724; --text: #e8eae6; --muted: #959b93;
+      --signal: #ff7552; --signal-soft: #33201b; --ok: #5dbb83; --warn: #e3a63c; --warn-soft: #2c2414;
+      --idle: #454a44; --ended: #2a2d2a; --on-signal: #131513;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; border-radius: 0; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 14px/1.45 var(--sans); font-variant-numeric: tabular-nums;
+  }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 700; }
+  h1 a { color: var(--muted); text-decoration: none; font-weight: 400; margin-right: 10px; }
+  .bar { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; justify-content: flex-end; }
+  .group { display: inline-flex; border: 1px solid var(--line); }
+  .group button, .group a {
+    font: inherit; font-size: 13px; padding: 4px 10px; min-height: 32px; border: 0; cursor: pointer;
+    background: var(--panel); color: var(--muted); text-decoration: none; display: inline-flex; align-items: center;
+  }
+  .group > * + * { border-left: 1px solid var(--line) !important; }
+  .group button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+  .group button:focus-visible, .group a:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+  button, a { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .sub { color: var(--muted); font-size: 13px; margin: -6px 0 14px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin-bottom: 16px; }
+  .tile { border: 1px solid var(--line); background: var(--panel); padding: 10px 12px; min-width: 0; }
+  .tile .k { font-size: 12px; color: var(--muted); }
+  .tile .v { font-size: 24px; font-weight: 700; line-height: 1.2; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .n { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .tile.signal .v { color: var(--signal); }
+  .tile.ok .v { color: var(--ok); }
+  .tile.warn .v { color: var(--warn); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 16px; }
+  section { border: 1px solid var(--line); background: var(--panel); min-width: 0; margin-bottom: 16px; }
+  .grid section { margin-bottom: 0; }
+  .grid + section, section + .grid { margin-top: 16px; }
+  section h2 {
+    margin: 0; padding: 8px 14px; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    border-bottom: 1px solid var(--line); background: var(--bg);
+  }
+  section h2 small { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 8px; font-size: 12px; }
+  .body { padding: 10px 14px 14px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .legend i { display: inline-block; width: 14px; height: 8px; margin-right: 6px; }
+  .s-working { background: var(--ok); }
+  .s-waiting { background: var(--signal); }
+  .s-idle { background: var(--idle); }
+  .s-error { background: var(--warn); }
+
+  /* Vertical bars: hours, weekdays, days. */
+  .cols { display: flex; align-items: flex-end; gap: 2px; height: 140px; border-bottom: 1px solid var(--line);
+    background: repeating-linear-gradient(to top, var(--grid) 0 1px, transparent 1px 35px); }
+  .cols button {
+    flex: 1 1 0; min-width: 0; height: 100%; display: flex; flex-direction: column-reverse; padding: 0; border: 0;
+    background: none; cursor: pointer;
+  }
+  .cols button i { display: block; width: 100%; }
+  .cols button[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: -1px; }
+  .cols button:focus-visible { outline: 2px solid var(--text); }
+  .axis { display: flex; gap: 2px; font: 11px/16px var(--mono); color: var(--muted); }
+  .axis span { flex: 1 1 0; min-width: 0; text-align: center; overflow: hidden; white-space: nowrap; }
+  .pick { min-height: 2.9em; margin-top: 6px; font-size: 13px; }
+  .pick b { font-weight: 600; }
+
+  /* Horizontal bars: machines, projects. */
+  .hbars { display: grid; gap: 6px; }
+  .hbar { display: grid; grid-template-columns: minmax(80px, 34%) minmax(0, 1fr); gap: 4px 10px; align-items: center; font-size: 13px; }
+  .hbar .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hbar .track { display: flex; height: 12px; background: var(--grid); }
+  .hbar .track i { display: block; height: 100%; }
+  .hbar .val { grid-column: 2; font-size: 12px; color: var(--muted); margin-top: -2px; }
+
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); white-space: nowrap; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  td code { font: 12px var(--mono); overflow-wrap: anywhere; }
+  td .ex { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  tr:last-child td { border-bottom: 0; }
+  .muted { color: var(--muted); }
+  .signal { color: var(--signal); }
+  ul.plain { list-style: none; margin: 0; padding: 0; }
+  ul.plain li { padding: 3px 0; border-bottom: 1px solid var(--grid); display: flex; justify-content: space-between; gap: 12px; }
+  ul.plain li:last-child { border-bottom: 0; }
+  ul.plain li span:first-child { overflow-wrap: anywhere; min-width: 0; }
+  .empty, .offline { color: var(--muted); padding: 24px 0; }
+  .offline { color: var(--warn); }
+  .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+
+  @media (hover: hover) {
+    .group button:hover, .group a:hover { color: var(--text); }
+    .cols button:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+  }
+  @media (pointer: coarse) {
+    .group button, .group a { min-height: 44px; padding: 8px 14px; font-size: 15px; }
+    .cols { height: 170px; }
+  }
+  @media (max-width: 560px) {
+    body { padding: 12px; }
+    .tile .v { font-size: 20px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="/" title="Wróć do listy sesji">← agenci</a>Statystyki</h1>
+  <div class="bar">
+    <div class="group" role="group" aria-label="Okres">
+      <button type="button" data-days="1">1 dzień</button>
+      <button type="button" data-days="7">7 dni</button>
+      <button type="button" data-days="30">30 dni</button>
+    </div>
+    <div class="group" role="group" aria-label="Dane">
+      <a id="report" href="/api/report" target="_blank" rel="noopener" title="Raport Markdown dla agenta AI">raport dla AI</a>
+      <a id="events" href="/api/events" target="_blank" rel="noopener" title="Surowe zdarzenia (JSON lines)">zdarzenia</a>
+      <a id="json" href="/api/stats" target="_blank" rel="noopener" title="Statystyki jako JSON">JSON</a>
+    </div>
+  </div>
+</header>
+<div class="sub" id="sub"></div>
+<div id="offline" class="offline" hidden></div>
+<main id="main"></main>
+<script>
+const CAUSE = { permission: "zgoda", question: "pytanie", plan: "plan", decision: "decyzja", session_offer: "propozycja sesji", other: "inne" };
+const STATE = { working: "pracuje", waiting: "czeka", idle: "gotowy", error: "błąd", ended: "zakończona" };
+const AGENT = { claude: "Claude Code", opencode: "OpenCode" };
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function plural(n, one, few, many) {
+  if (n === 1) return one;
+  const d = n % 10, dd = n % 100;
+  return d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
+}
+function dur(sec) {
+  sec = Math.round(sec || 0);
+  if (sec < 60) return sec + " s";
+  if (sec < 3600) return Math.round(sec / 60) + " min";
+  if (sec < 10 * 3600) { const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60); return h + " h" + (m ? " " + m + " min" : ""); }
+  return (sec / 3600).toFixed(0) + " h";
+}
+const pct = f => Math.round((f || 0) * 100) + "%";
+const num = n => (n || 0).toLocaleString("pl-PL");
+const dt = iso => new Date(iso).toLocaleString("pl-PL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+let days = 7;
+try { const d = +localStorage.getItem("statsDays"); if ([1, 7, 30].includes(d)) days = d; } catch {}
+
+function setDays(d) {
+  days = d;
+  try { localStorage.setItem("statsDays", String(d)); } catch {}
+  for (const b of document.querySelectorAll("[data-days]")) b.setAttribute("aria-pressed", String(+b.dataset.days === d));
+  document.getElementById("report").href = "/api/report?days=" + d;
+  document.getElementById("events").href = "/api/events?days=" + d;
+  document.getElementById("json").href = "/api/stats?days=" + d;
+  load();
+}
+for (const b of document.querySelectorAll("[data-days]")) b.addEventListener("click", () => setDays(+b.dataset.days));
+
+let seq = 0;
+async function load() {
+  const my = ++seq;
+  const off = document.getElementById("offline");
+  try {
+    const r = await fetch("/api/stats?days=" + days, { cache: "no-store" });
+    if (my !== seq) return;
+    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    const st = await r.json();
+    if (my !== seq) return;
+    off.hidden = true;
+    render(st);
+  } catch (e) {
+    if (my !== seq) return;
+    off.hidden = false;
+    off.textContent = "Nie udało się pobrać statystyk: " + e.message;
+  }
+}
+
+function section(title, note) {
+  const s = el("section");
+  const h = el("h2", null, title);
+  if (note) h.append(el("small", null, note));
+  const body = el("div", "body");
+  s.append(h, body);
+  return [s, body];
+}
+
+function tile(k, v, n, cls) {
+  const t = el("div", "tile" + (cls ? " " + cls : ""));
+  t.append(el("div", "k", k), el("div", "v", v));
+  if (n) t.append(el("div", "n", n));
+  return t;
+}
+
+function legend(items) {
+  const l = el("div", "legend");
+  for (const [cls, label] of items) { const s = el("span"); s.append(el("i", cls), label); l.append(s); }
+  return l;
+}
+
+// Vertical stacked bars (working + waiting) with a tap-to-read line under them.
+function columns(groups, label, describe) {
+  const wrap = el("div");
+  const cols = el("div", "cols"), axis = el("div", "axis"), pick = el("div", "pick");
+  const max = Math.max(1, ...groups.map(g => g.workingSec + g.waitingSec));
+  const every = groups.length > 16 ? Math.ceil(groups.length / 8) : 1;
+  const show = (g, b) => {
+    for (const x of cols.children) x.setAttribute("aria-pressed", String(x === b));
+    pick.replaceChildren(...describe(g));
+  };
+  groups.forEach((g, i) => {
+    const b = el("button");
+    b.type = "button";
+    b.setAttribute("aria-label", label(g));
+    const w = el("i", "s-working"), q = el("i", "s-waiting");
+    w.style.height = (g.workingSec / max * 100) + "%";
+    q.style.height = (g.waitingSec / max * 100) + "%";
+    b.append(w, q);
+    b.addEventListener("click", () => show(g, b));
+    cols.append(b);
+    axis.append(el("span", null, i % every === 0 ? label(g) : ""));
+  });
+  pick.append(el("span", "muted", "Dotknij słupka, by zobaczyć szczegóły."));
+  wrap.append(cols, axis, pick);
+  return wrap;
+}
+
+function describeTime(title) {
+  return g => {
+    const b = el("b", null, title(g) + ": ");
+    const parts = [
+      "praca " + dur(g.workingSec), "czekanie na Ciebie " + dur(g.waitingSec),
+      "≥1 czeka " + dur(g.anyWaitingSec) + " z " + dur(g.activeSec) + " aktywnych",
+      "średnio " + (g.avgWorking || 0).toFixed(2) + " pracujących",
+      num(g.prompts) + " " + plural(g.prompts, "polecenie", "polecenia", "poleceń"),
+      num(g.permissions) + " " + plural(g.permissions, "zgoda", "zgody", "zgód"),
+    ];
+    if (g.waits.count) parts.push("mediana reakcji " + dur(g.waits.medianSec) + " (n=" + g.waits.count + ")");
+    return [b, document.createTextNode(parts.join(" · "))];
+  };
+}
+
+function hbars(groups, limit) {
+  const box = el("div", "hbars");
+  const list = groups.filter(g => g.workingSec + g.waitingSec > 0).slice(0, limit);
+  const max = Math.max(1, ...list.map(g => g.workingSec + g.waitingSec));
+  for (const g of list) {
+    const row = el("div", "hbar");
+    const name = el("span", "name", g.label ? g.label : g.key);
+    name.title = g.label ? g.label + " (" + g.key + ")" : g.key;
+    const track = el("span", "track");
+    const w = el("i", "s-working"), q = el("i", "s-waiting");
+    w.style.width = (g.workingSec / max * 100) + "%";
+    q.style.width = (g.waitingSec / max * 100) + "%";
+    track.append(w, q);
+    const val = el("span", "val", "praca " + dur(g.workingSec) + " · czeka " + dur(g.waitingSec) + " (" + pct(g.waitShare) + ") · "
+      + g.sessions + " " + plural(g.sessions, "sesja", "sesje", "sesji") + " · " + num(g.permissions) + " " + plural(g.permissions, "zgoda", "zgody", "zgód")
+      + (g.waits.count ? " · mediana reakcji " + dur(g.waits.medianSec) : ""));
+    row.append(name, track, val);
+    box.append(row);
+  }
+  if (!list.length) box.append(el("div", "muted", "Brak danych."));
+  return box;
+}
+
+function table(head, rows) {
+  const wrap = el("div", "scroll");
+  const t = el("table");
+  const tr = el("tr");
+  for (const [label, isNum] of head) tr.append(el("th", isNum ? "num" : null, label));
+  const thead = el("thead"); thead.append(tr);
+  const tbody = el("tbody");
+  for (const cells of rows) {
+    const r = el("tr");
+    cells.forEach((c, i) => {
+      const td = el("td", head[i][1] ? "num" : null);
+      if (c instanceof Node) td.append(c); else td.textContent = c;
+      r.append(td);
+    });
+    tbody.append(r);
+  }
+  t.append(thead, tbody);
+  wrap.append(t);
+  return wrap;
+}
+
+function countList(items, empty) {
+  if (!items || !items.length) return el("div", "muted", empty || "Brak.");
+  const ul = el("ul", "plain");
+  for (const c of items) { const li = el("li"); li.append(el("span", null, c.key), el("span", null, num(c.count))); ul.append(li); }
+  return ul;
+}
+
+function render(st) {
+  const main = document.getElementById("main");
+  const t = st.totals, lat = st.latency, par = st.parallelism;
+  document.getElementById("sub").textContent = dt(st.period.from) + " – " + dt(st.period.to) + " · "
+    + num(st.coverage.records) + " " + plural(st.coverage.records, "zdarzenie", "zdarzenia", "zdarzeń");
+  const out = [];
+  if (!st.coverage.records) {
+    main.replaceChildren(el("div", "empty", "Brak zdarzeń w tym okresie. Statystyki zbierają się od chwili włączenia archiwum."));
+    return;
+  }
+
+  const tiles = el("div", "tiles");
+  tiles.append(
+    tile("Praca agentów", dur(t.workingSec), t.sessions + " " + plural(t.sessions, "sesja", "sesje", "sesji") + " · " + num(t.turns) + " " + plural(t.turns, "tura", "tury", "tur"), "ok"),
+    tile("Czekanie na Ciebie", dur(t.waitingSec), pct(t.waitShare) + " aktywnego czasu sesji", "signal"),
+    tile("Twój czas reakcji", lat.all.count ? dur(lat.all.medianSec) : "–", "mediana · p90 " + dur(lat.all.p90Sec) + " · " + num(lat.all.count) + " " + plural(lat.all.count, "raz", "razy", "razy")),
+    tile("Prośby o zgodę", num(t.permissions), st.permissions.byPattern.length + " " + plural(st.permissions.byPattern.length, "wzorzec", "wzorce", "wzorców")),
+    tile("Polecenia", num(t.prompts), st.nextPrompt.count ? "kolejne po " + dur(st.nextPrompt.medianSec) + " (mediana)" : ""),
+    tile("Równolegle", (par.avgWorkingWhenActive || 0).toFixed(1), "średnio pracujących · maks. " + par.maxWorking),
+    tile("Ktoś czeka", pct(par.anyWaitingShareOfActive), "czasu aktywnego · 2+ naraz: " + par.multiWaitingEvents + "×", par.anyWaitingShareOfActive > 0.3 ? "signal" : ""),
+    tile("Błędy · kompaktowania", t.errors + " · " + st.compactions.total, t.interruptions ? t.interruptions + " " + plural(t.interruptions, "przerwanie", "przerwania", "przerwań") : "", t.errors ? "warn" : ""),
+  );
+  out.push(tiles);
+
+  const lg = legend([["s-working", "praca"], ["s-waiting", "czeka na Ciebie"]]);
+  const grid1 = el("div", "grid");
+  {
+    const [s, b] = section("Pora dnia", "suma z całego okresu");
+    b.append(lg.cloneNode(true), columns(st.byHour, g => g.key, describeTime(g => g.key + ":00")));
+    grid1.append(s);
+  }
+  if (st.byDay.length > 1) {
+    const [s, b] = section("Dni");
+    b.append(lg.cloneNode(true), columns(st.byDay, g => g.key.slice(8) + "." + g.key.slice(5, 7), describeTime(g => g.key)));
+    grid1.append(s);
+  }
+  if (st.period.days >= 7) {
+    const [s, b] = section("Dni tygodnia", "suma z całego okresu");
+    b.append(lg.cloneNode(true), columns(st.byWeekday, g => g.key, describeTime(g => g.key)));
+    grid1.append(s);
+  }
+  out.push(grid1);
+
+  const grid2 = el("div", "grid");
+  {
+    const [s, b] = section("Na co czekają sesje", "epizody do 4 h");
+    b.append(table([["przyczyna"], ["razy", 1], ["mediana", 1], ["p90", 1], ["suma", 1]],
+      lat.byCause.filter(c => c.count).map(c => [CAUSE[c.cause] || c.cause, num(c.count), dur(c.medianSec), dur(c.p90Sec), dur(c.totalSec)])));
+    const notes = [];
+    if (lat.over4h) notes.push(lat.over4h + " " + plural(lat.over4h, "epizod", "epizody", "epizodów") + " ponad 4 h pominięto");
+    if (lat.openAtEnd) notes.push(lat.openAtEnd + " nadal czeka");
+    if (notes.length) b.append(el("p", "note", notes.join(" · ")));
+    grid2.append(s);
+  }
+  {
+    const [s, b] = section("Równoległość");
+    b.append(table([["miara"], ["wartość", 1]], [
+      ["średnio pracujących (gdy coś pracuje)", (par.avgWorkingWhenActive || 0).toFixed(2)],
+      ["maks. pracujących naraz", par.maxWorking + (par.maxWorkingAt ? " · " + dt(par.maxWorkingAt) : "")],
+      ["maks. czekających naraz", par.maxWaiting + (par.maxWaitingAt ? " · " + dt(par.maxWaitingAt) : "")],
+      ["coś pracuje lub czeka", dur(par.activeSec)],
+      ["≥1 czeka na Ciebie", dur(par.anyWaitingSec) + " (" + pct(par.anyWaitingShareOfActive) + ")"],
+      ["≥2 czekają naraz", dur(par.multiWaitingSec) + " (" + par.multiWaitingEvents + "×)"],
+    ]));
+    grid2.append(s);
+  }
+  out.push(grid2);
+
+  const grid3 = el("div", "grid");
+  {
+    const [s, b] = section("Maszyny");
+    b.append(hbars(st.byHost, 12));
+    grid3.append(s);
+  }
+  {
+    const [s, b] = section("Projekty");
+    b.append(hbars(st.byProject, 12));
+    grid3.append(s);
+  }
+  out.push(grid3);
+
+  {
+    const [s, b] = section("Powtarzające się prośby o zgodę", "kandydaci do allowlisty");
+    const rows = st.permissions.byPattern.slice(0, 20).map(p => {
+      const c = el("span");
+      c.append(el("code", null, p.pattern), el("span", "ex", p.example));
+      return [c, num(p.count), String(p.sessions), String(p.projects), p.waits.count ? dur(p.waits.medianSec) : "–", dur(p.waits.totalSec)];
+    });
+    if (rows.length) b.append(table([["wzorzec"], ["razy", 1], ["sesje", 1], ["projekty", 1], ["mediana reakcji", 1], ["suma czekania", 1]], rows));
+    else b.append(el("div", "muted", "Brak próśb o zgodę."));
+    if (st.permissions.denied.length) b.append(el("p", "note", "Odmowy w trybie auto: " + st.permissions.denied.map(c => c.key + " " + c.count).join(", ")));
+    out.push(s);
+  }
+
+  {
+    const [s, b] = section("Narzędzia");
+    const rows = st.tools.slice(0, 20).map(x => [x.tool, num(x.calls), num(x.failures), x.failures ? pct(x.failureRate) : "–",
+      x.timed ? dur(x.avgMs / 1000) : "–", x.timed ? dur(x.totalMs / 1000) : "–", num(x.permissions)]);
+    if (rows.length) b.append(table([["narzędzie"], ["wywołania", 1], ["błędy", 1], ["% błędów", 1], ["śr. czas", 1], ["łącznie", 1], ["zgody", 1]], rows));
+    else b.append(el("div", "muted", "Brak danych o narzędziach."));
+    out.push(s);
+  }
+
+  const grid4 = el("div", "grid");
+  {
+    const [s, b] = section("Błędy");
+    b.append(countList(st.errors, "Bez błędów."));
+    grid4.append(s);
+  }
+  {
+    const [s, b] = section("Kompaktowania", st.compactions.total ? String(st.compactions.total) : "");
+    b.append(countList(st.compactions.byProject, "Brak kompaktowań."));
+    if (st.compactions.byTrigger.length) b.append(el("p", "note", st.compactions.byTrigger.map(c => c.key + " " + c.count).join(", ")));
+    grid4.append(s);
+  }
+  {
+    const [s, b] = section("Podagenci i zadania");
+    b.append(countList(st.subagents, "Brak podagentów."));
+    b.append(el("p", "note", "Listy zadań: utworzone " + st.todos.created + ", ukończone " + st.todos.completed));
+    if (st.interruptions.length) b.append(el("p", "note", "Przerwania: " + st.interruptions.map(c => c.key + " " + c.count).join(", ")));
+    grid4.append(s);
+  }
+  out.push(grid4);
+
+  {
+    const [s, b] = section("Sesje", "najdłużej czekające na Ciebie najpierw");
+    const rows = [...st.sessions].sort((a, z) => z.waitingSec - a.waitingSec || z.workingSec - a.workingSec).slice(0, 40).map(r => {
+      const who = el("span");
+      who.append(el("span", null, (r.project || "bez projektu") + " · " + (r.hostLabel || r.host)),
+        el("span", "ex", (AGENT[r.agent] || r.agent) + (r.model ? " · " + r.model : "") + (r.title ? " · " + r.title : "")));
+      return [who, dt(r.start), dur(r.workingSec), dur(r.waitingSec), String(r.prompts), String(r.permissions), r.longestWaitSec ? dur(r.longestWaitSec) : "–", String(r.errors), STATE[r.lastState] || r.lastState];
+    });
+    b.append(table([["sesja"], ["od"], ["praca", 1], ["czeka", 1], ["polecenia", 1], ["zgody", 1], ["najdłużej", 1], ["błędy", 1], ["stan"]], rows));
+    if (st.sessions.length > 40) b.append(el("p", "note", "Pokazano 40 z " + st.sessions.length + "; pełna lista w JSON."));
+    out.push(s);
+  }
+
+  if (st.coverage.missing && st.coverage.missing.length) {
+    out.push(el("p", "note", "Brak w danych: " + st.coverage.missing.join("; ") + ". Te liczby są zerowe."));
+  }
+  out.push(el("p", "note", "Limity: pojedynczy odcinek liczony najwyżej " + dur(st.caps.intervalMaxSec) + ", praca bez zdarzeń najwyżej "
+    + dur(st.caps.workingSilenceMaxSec) + "; czas reakcji to epizody do " + dur(st.caps.latencyMaxSec) + ". Czas lokalny: " + st.period.tz + "."));
+  main.replaceChildren(...out);
+}
+
+setDays(days);
+setInterval(() => { if (!document.hidden) load(); }, 60e3);
+</script>
+</body>
+</html>

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -53,6 +54,33 @@ type Event struct {
 	// KeepWaiting: the event is only a reminder (a notification) and must not
 	// change a session that already waits for the user.
 	KeepWaiting bool
+
+	// Extras kept in the archive for statistics (see Record).
+	Subagent   string // subagent type (SubagentStart/SubagentStop)
+	TodoID     string // task-list item id (TaskCreated/TaskCompleted)
+	Todo       string // task-list item subject
+	DurationMs int64  // how long a tool ran (PostToolUse/PostToolUseFailure)
+	Failed     bool   // the tool call failed
+	ErrorKind  string // machine-readable error type (StopFailure "error")
+	Reason     string // SessionEnd reason, compaction trigger and the like
+	// For Claude Code: PostToolUse/PostToolUseFailure carry the tool name here
+	// (Tool would count the call twice), PermissionDenied the denial reason,
+	// Notification its type, SessionStart/PostModelSwitch their source.
+
+	// Bookkeeping for the session view only (not archived).
+	SubagentID      string // subagent instance id (agent_id)
+	SubagentStarted bool   // SubagentStart: SubagentID is now running
+	SubagentStopped bool   // SubagentStop: SubagentID has finished
+	TodoDone        bool   // TodoID was completed (otherwise created)
+	Compacted       bool   // the context was compacted
+	// WaitFor names the tool call a waiting event waits on (see waitKey);
+	// Resolves names a finished tool call. Claude Code sends no event when you
+	// approve a permission or answer a question, so the end of that same tool
+	// call is what tells the wait is over.
+	WaitFor  string
+	Resolves string
+	// AgentID is the subagent the event comes from (empty: the main thread).
+	AgentID string
 }
 
 // HistoryEntry is one meaningful event in a session's recent past.
@@ -87,11 +115,34 @@ type Session struct {
 	Permissions int            `json:"permissions"`
 	Tools       map[string]int `json:"tools,omitempty"`
 	// PendingAsk is the question to show once the current turn ends.
-	PendingAsk string `json:"pendingAsk,omitempty"`
-	History     []HistoryEntry `json:"history,omitempty"`
+	PendingAsk string         `json:"pendingAsk,omitempty"`
+	History    []HistoryEntry `json:"history,omitempty"`
 	// Timeline holds only state changes, kept much longer than History, so the
 	// page can draw what a session was doing over the last hours.
 	Timeline []StateChange `json:"timeline,omitempty"`
+
+	// Subagents are the subagents running right now (started, not stopped).
+	Subagents []Subagent `json:"subagents,omitempty"`
+	// SubagentRuns counts subagents started over the session.
+	SubagentRuns int `json:"subagentRuns"`
+	// Compactions counts finished context compactions.
+	Compactions int `json:"compactions"`
+	// ToolFailures counts tool calls that failed, interrupted ones included.
+	ToolFailures int `json:"toolFailures"`
+	// TodosTotal and TodosDone count distinct task-list items created and
+	// completed; TodoIDs maps each item's id to whether it is done.
+	TodosTotal int             `json:"todosTotal"`
+	TodosDone  int             `json:"todosDone"`
+	TodoIDs    map[string]bool `json:"todoIds,omitempty"`
+	// WaitFor is the tool call a waiting session waits on (see Event.WaitFor).
+	WaitFor string `json:"waitFor,omitempty"`
+}
+
+// Subagent is one running subagent of a session.
+type Subagent struct {
+	ID    string    `json:"id"`
+	Type  string    `json:"type"`
+	Since time.Time `json:"since"`
 }
 
 // StateChange marks the moment a session entered a state.
@@ -106,6 +157,8 @@ func (s *Session) clone() Session {
 	c.Tools = maps.Clone(s.Tools)
 	c.History = append([]HistoryEntry(nil), s.History...)
 	c.Timeline = append([]StateChange(nil), s.Timeline...)
+	c.Subagents = append([]Subagent(nil), s.Subagents...)
+	c.TodoIDs = maps.Clone(s.TodoIDs)
 	return c
 }
 
@@ -116,6 +169,10 @@ const (
 	historyLen    = 30
 	timelineFor   = 24 * time.Hour
 	timelineLen   = 2000
+	// A subagent whose stop never arrived stops being shown after this long.
+	subagentFor  = 2 * time.Hour
+	maxSubagents = 50
+	maxTodoIDs   = 1000
 )
 
 const (
@@ -206,17 +263,19 @@ func (s *Store) SetHostName(host, name string) error {
 	return nil
 }
 
-func (s *Store) Apply(ev Event) {
+// Apply updates the session the event belongs to and returns what to archive.
+// ok is false when the event names no session (nothing was applied).
+func (s *Store) Apply(ev Event) (rec Record, ok bool) {
 	if ev.SessionID == "" {
-		return
+		return Record{}, false
 	}
 	key := ev.Agent + "/" + ev.Host + "/" + ev.SessionID
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	sess, ok := s.sessions[key]
-	if !ok {
+	sess, known := s.sessions[key]
+	if !known {
 		sess = &Session{
 			Key:       key,
 			Agent:     ev.Agent,
@@ -227,6 +286,8 @@ func (s *Store) Apply(ev Event) {
 		}
 		s.sessions[key] = sess
 	}
+	prev := sess.State
+	defer func() { rec = record(ev, sess, prev) }()
 	if ev.Cwd != "" {
 		sess.Cwd = ev.Cwd
 		sess.Project = projectName(ev.Cwd)
@@ -249,10 +310,26 @@ func (s *Store) Apply(ev Event) {
 		ev.State = ""
 		ev.Detail = ""
 	}
+	if ev.Resolves != "" && sess.State == StateWaiting && sess.WaitFor == ev.Resolves {
+		ev.State = StateWorking
+	}
+	// A subagent running in the background keeps calling tools while the main
+	// thread waits for you (or the other way round): that is not an answer.
+	if ev.State == StateWorking && ev.Tool != "" && sess.State == StateWaiting && sess.WaitFor != "" &&
+		!strings.HasPrefix(sess.WaitFor, ev.AgentID+"|") {
+		ev.State = ""
+	}
 	if ev.State != "" {
+		if ev.State == StateWaiting {
+			sess.WaitFor = ev.WaitFor
+		} else {
+			sess.WaitFor = ""
+		}
 		sess.State = ev.State
 		sess.Detail = ev.Detail
-	} else if ev.Detail != "" {
+	} else if ev.Detail != "" && sess.State != StateWaiting {
+		// A side note (a subagent, a finished task item, a compaction) must
+		// not hide what the user is being asked; History still gets it.
 		sess.Detail = ev.Detail
 	}
 	if ev.Model != "" {
@@ -282,11 +359,113 @@ func (s *Store) Apply(ev Event) {
 	if ev.Permission {
 		sess.Permissions++
 	}
+	if ev.Failed {
+		sess.ToolFailures++
+	}
+	if ev.Compacted {
+		sess.Compactions++
+	}
+	sess.trackSubagent(ev)
+	sess.trackTodo(ev)
 	sess.addHistory(ev)
 	sess.addTimeline(ev.At)
 	sess.LastEvent = ev.Kind
 	sess.UpdatedAt = ev.At
 	s.dirty = true
+	return Record{}, true
+}
+
+// record describes an applied event for the archive. ev is the event as
+// Apply resolved it (a deferred question already turned into "waiting").
+func record(ev Event, sess *Session, prev State) Record {
+	return Record{
+		At: ev.At, Key: sess.Key, Agent: sess.Agent, Host: sess.Host, SessionID: sess.SessionID,
+		Project: sess.Project, Cwd: sess.Cwd, Kind: ev.Kind,
+		State: sess.State, Prev: prev, Title: sess.Task, Detail: ev.Detail, Tool: ev.Tool,
+		Prompt: clip(ev.Prompt), Model: sess.Model, Mode: sess.Mode, Permission: ev.Permission,
+		Subagent: ev.Subagent, TodoID: ev.TodoID, Todo: ev.Todo, DurationMs: ev.DurationMs,
+		Failed: ev.Failed, ErrorKind: ev.ErrorKind, Reason: ev.Reason,
+	}
+}
+
+// trackSubagent keeps the list of running subagents. Claude Code sends
+// SubagentStart again when a subagent resumes; one already running is neither
+// listed nor counted twice.
+func (s *Session) trackSubagent(ev Event) {
+	switch {
+	case ev.State == StateEnded:
+		s.Subagents = nil
+		return
+	case ev.SubagentStarted:
+		i := -1
+		if ev.SubagentID != "" {
+			i = slices.IndexFunc(s.Subagents, func(a Subagent) bool { return a.ID == ev.SubagentID })
+		}
+		switch {
+		case i >= 0:
+			if ev.Subagent != "" {
+				s.Subagents[i].Type = ev.Subagent
+			}
+		case ev.SubagentID != "":
+			s.SubagentRuns++
+			s.Subagents = append(s.Subagents, Subagent{ID: ev.SubagentID, Type: ev.Subagent, Since: ev.At})
+		default:
+			s.SubagentRuns++ // without an id it can't be listed, only counted
+		}
+	case ev.SubagentStopped:
+		s.Subagents = slices.DeleteFunc(s.Subagents, func(a Subagent) bool { return a.ID == ev.SubagentID })
+	default:
+		return
+	}
+	s.Subagents = runningSubagents(s.Subagents, ev.At)
+	if over := len(s.Subagents) - maxSubagents; over > 0 {
+		s.Subagents = append([]Subagent(nil), s.Subagents[over:]...)
+	}
+	if len(s.Subagents) == 0 {
+		s.Subagents = nil
+	}
+}
+
+// runningSubagents drops subagents started more than subagentFor before now,
+// so a stop that never arrived can't keep one listed forever. It returns a new
+// slice; subs is not modified.
+func runningSubagents(subs []Subagent, now time.Time) []Subagent {
+	var out []Subagent
+	for _, a := range subs {
+		if now.Sub(a.Since) <= subagentFor {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// trackTodo counts distinct task-list items created and completed. An item
+// completed without a seen creation counts as created too.
+func (s *Session) trackTodo(ev Event) {
+	if ev.TodoID == "" {
+		return
+	}
+	done, seen := s.TodoIDs[ev.TodoID]
+	if !seen {
+		if len(s.TodoIDs) >= maxTodoIDs {
+			// Too many ids to remember: count each event as it comes.
+			if ev.TodoDone {
+				s.TodosDone++
+			} else {
+				s.TodosTotal++
+			}
+			return
+		}
+		if s.TodoIDs == nil {
+			s.TodoIDs = map[string]bool{}
+		}
+		s.TodoIDs[ev.TodoID] = false
+		s.TodosTotal++
+	}
+	if ev.TodoDone && !done {
+		s.TodoIDs[ev.TodoID] = true
+		s.TodosDone++
+	}
 }
 
 // addHistory records events that change something visible. A repeat of the
@@ -343,6 +522,7 @@ func (s *Store) List(now time.Time) []Session {
 		}
 		c := sess.clone()
 		c.Stale = c.State == StateWorking && age > staleAfter
+		c.Subagents = runningSubagents(c.Subagents, now)
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool {

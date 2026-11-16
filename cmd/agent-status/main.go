@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	"agent-status/internal/status"
@@ -20,7 +21,14 @@ func main() {
 	addr := flag.String("addr", ":7777", "listen address")
 	statePath := flag.String("state", "agent-status.json", "state file (empty disables persistence)")
 	logPath := flag.String("log", "", "log file (default: stderr)")
+	archiveDir := flag.String("archive", "auto", `directory for the event archive used by statistics ("auto": "archive" next to the state file; empty disables)`)
 	flag.Parse()
+	if *archiveDir == "auto" {
+		*archiveDir = ""
+		if *statePath != "" {
+			*archiveDir = filepath.Join(filepath.Dir(*statePath), "archive")
+		}
+	}
 
 	out := os.Stderr
 	if *logPath != "" {
@@ -33,13 +41,13 @@ func main() {
 		out = f
 	}
 	log := slog.New(slog.NewTextHandler(out, nil))
-	if err := run(*addr, *statePath, log); err != nil {
+	if err := run(*addr, *statePath, *archiveDir, log); err != nil {
 		log.Error("agent-status stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(addr, statePath string, log *slog.Logger) error {
+func run(addr, statePath, archiveDir string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -47,10 +55,27 @@ func run(addr, statePath string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	var archive *status.Archive
+	if archiveDir != "" {
+		if archive, err = status.OpenArchive(archiveDir); err != nil {
+			return err
+		}
+		defer archive.Close()
+		log.Info("archiving events", "dir", archiveDir)
+	}
+	// Last heartbeat of every machine, next to the state file.
+	machinesPath := ""
+	if statePath != "" {
+		machinesPath = filepath.Join(filepath.Dir(statePath), "machines.json")
+	}
+	machines, err := status.NewMachines(machinesPath)
+	if err != nil {
+		return err
+	}
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           web.New(store, log).Handler(),
+		Handler:           web.New(store, archive, machines, log).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -64,6 +89,9 @@ func run(addr, statePath string, log *slog.Logger) error {
 			case <-t.C:
 				if err := store.Save(); err != nil {
 					log.Warn("save state", "err", err)
+				}
+				if err := machines.Save(); err != nil {
+					log.Warn("save machines", "err", err)
 				}
 			}
 		}
@@ -86,5 +114,6 @@ func run(addr, statePath string, log *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+	_ = machines.Save()
 	return store.Save()
 }
