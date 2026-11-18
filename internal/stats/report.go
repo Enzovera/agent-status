@@ -123,6 +123,7 @@ func Report(w io.Writer, st *Stats) error {
 	groupTable("Projekty", st.ByProject, 30)
 	groupTable("Agenci", st.ByAgent, 10)
 	groupTable("Modele", st.ByModel, 15)
+	costReport(p, st)
 
 	pm := st.Permissions
 	p("## Prośby o zgodę\n\nRazem: %d. Według narzędzia: %s.\n\n", pm.Total, countList(pm.ByTool, 15))

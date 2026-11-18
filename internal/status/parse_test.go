@@ -244,3 +244,26 @@ func TestClip(t *testing.T) {
 		t.Errorf("clip length %d", len(got))
 	}
 }
+
+func TestParseOpenCodeChild(t *testing.T) {
+	at := time.Now()
+	ev, err := ParseOpenCode("h", []byte(`{"type":"session.created","data":{"sessionID":"c","parentID":"p","title":"Find handlers","agent":"explore","slug":"x","version":"2.3.0"}}`), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.ParentID != "p" || ev.Subagent != "explore" || ev.Task != "Find handlers" || ev.State != StateIdle || ev.Detail != "podagent explore" {
+		t.Errorf("child created = %+v", ev)
+	}
+	ev, _ = ParseOpenCode("h", []byte(`{"type":"session.created","data":{"sessionID":"r","title":"New session","agent":"build"}}`), at)
+	if ev.ParentID != "" || ev.Subagent != "" || ev.Detail != "" {
+		t.Errorf("root created = %+v", ev)
+	}
+	ev, _ = ParseOpenCode("h", []byte(`{"type":"permission.asked","data":{"sessionID":"c","parentID":"p","action":"bash","resources":["ls"]}}`), at)
+	if ev.ParentID != "p" || ev.State != StateWaiting || ev.Subagent != "" {
+		t.Errorf("child permission = %+v", ev)
+	}
+	ev, _ = ParseOpenCode("h", []byte(`{"type":"session.idle","data":{"sessionID":"c","parentID":"c"}}`), at)
+	if ev.ParentID != "" {
+		t.Errorf("self parent kept: %+v", ev)
+	}
+}

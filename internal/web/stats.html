@@ -40,6 +40,7 @@
   .group button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
   .group button:focus-visible, .group a:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
   button, a { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .short { display: none; }
   .sub { color: var(--muted); font-size: 13px; margin: -6px 0 14px; }
 
   .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin-bottom: 16px; }
@@ -119,6 +120,16 @@
   }
   @media (max-width: 560px) {
     body { padding: 12px; }
+    header { gap: 8px; }
+    h1 { width: 100%; }
+    .bar { width: 100%; justify-content: space-between; gap: 6px; }
+    .group button, .group a { padding: 4px 8px; }
+    .long { display: none; }
+    .short { display: inline; }
+    /* Two tiles side by side: a phone shows the summary without scrolling through it. */
+    .tiles { grid-template-columns: 1fr 1fr; }
+    .tile { padding: 8px 10px; }
+    .axis span { overflow: visible; font-size: 10px; }
     .tile .v { font-size: 20px; }
   }
 </style>
@@ -128,13 +139,13 @@
   <h1><a href="/" title="Wróć do listy sesji">← agenci</a>Statystyki</h1>
   <div class="bar">
     <div class="group" role="group" aria-label="Okres">
-      <button type="button" data-days="1">1 dzień</button>
-      <button type="button" data-days="7">7 dni</button>
-      <button type="button" data-days="30">30 dni</button>
+      <button type="button" data-days="1">1<span class="long"> dzień</span><span class="short">d</span></button>
+      <button type="button" data-days="7">7<span class="long"> dni</span><span class="short">d</span></button>
+      <button type="button" data-days="30">30<span class="long"> dni</span><span class="short">d</span></button>
     </div>
     <div class="group" role="group" aria-label="Dane">
-      <a id="report" href="/api/report" target="_blank" rel="noopener" title="Raport Markdown dla agenta AI">raport dla AI</a>
-      <a id="events" href="/api/events" target="_blank" rel="noopener" title="Surowe zdarzenia (JSON lines)">zdarzenia</a>
+      <a id="report" href="/api/report" target="_blank" rel="noopener" title="Raport Markdown dla agenta AI"><span class="long">raport dla AI</span><span class="short">raport AI</span></a>
+      <a id="events" href="/api/events" target="_blank" rel="noopener" title="Surowe zdarzenia (JSON lines)"><span class="long">zdarzenia</span><span class="short">zdarz.</span></a>
       <a id="json" href="/api/stats" target="_blank" rel="noopener" title="Statystyki jako JSON">JSON</a>
     </div>
   </div>

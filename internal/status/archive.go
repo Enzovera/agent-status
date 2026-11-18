@@ -47,6 +47,27 @@ type Record struct {
 	Failed     bool   `json:"failed,omitempty"`
 	ErrorKind  string `json:"errorKind,omitempty"`
 	Reason     string `json:"reason,omitempty"`
+
+	// From Claude Code's statusLine (Kind KindStatusline, State equal to Prev):
+	// the session's cost so far, how much it grew since the session's previous
+	// such record (sum CostDelta to get the cost of a period), and the context
+	// window use.
+	CostUsd       float64 `json:"costUsd,omitempty"`
+	CostDelta     float64 `json:"costDelta,omitempty"`
+	ContextPct    float64 `json:"contextPct,omitempty"`
+	ContextTokens int     `json:"contextTokens,omitempty"`
+	LinesAdded    int     `json:"linesAdded,omitempty"`
+	LinesRemoved  int     `json:"linesRemoved,omitempty"`
+}
+
+// Worth reports whether the record says anything beyond "the session is
+// alive": a state change, a text, a tool, a prompt or one of the extras.
+// Clients that forward every event (streamed reasoning, usage updates) would
+// otherwise fill the archive with lines statistics never use.
+func (r Record) Worth() bool {
+	return r.State != r.Prev || r.Detail != "" || r.Tool != "" || r.Prompt != "" || r.Permission ||
+		r.Subagent != "" || r.TodoID != "" || r.DurationMs != 0 || r.Failed || r.ErrorKind != "" || r.Reason != "" ||
+		r.Kind == "UserPromptSubmit" || r.Kind == "Stop" || r.Kind == "SessionEnd"
 }
 
 // Archive appends records to one JSON-lines file per month:

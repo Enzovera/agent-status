@@ -70,9 +70,16 @@ type Event struct {
 	// Bookkeeping for the session view only (not archived).
 	SubagentID      string // subagent instance id (agent_id)
 	SubagentStarted bool   // SubagentStart: SubagentID is now running
-	SubagentStopped bool   // SubagentStop: SubagentID has finished
-	TodoDone        bool   // TodoID was completed (otherwise created)
-	Compacted       bool   // the context was compacted
+	SubagentSeen    bool   // SubagentID called a tool, so it is running
+	SubagentDoing   string // what the subagent's tool call does (its own detail)
+	// LaunchDesc/LaunchType: the main thread starts a subagent (Agent tool) for
+	// this task as this agent; LaunchedID is the id the tool returned for it.
+	LaunchDesc      string
+	LaunchType      string
+	LaunchedID      string
+	SubagentStopped bool // SubagentStop: SubagentID has finished
+	TodoDone        bool // TodoID was completed (otherwise created)
+	Compacted       bool // the context was compacted
 	// WaitFor names the tool call a waiting event waits on (see waitKey);
 	// Resolves names a finished tool call. Claude Code sends no event when you
 	// approve a permission or answer a question, so the end of that same tool
@@ -81,6 +88,9 @@ type Event struct {
 	Resolves string
 	// AgentID is the subagent the event comes from (empty: the main thread).
 	AgentID string
+	// ParentID is the session (same agent and host) that started this one as
+	// a subagent; OpenCode runs its subagents as child sessions.
+	ParentID string
 }
 
 // HistoryEntry is one meaningful event in a session's recent past.
@@ -123,6 +133,8 @@ type Session struct {
 
 	// Subagents are the subagents running right now (started, not stopped).
 	Subagents []Subagent `json:"subagents,omitempty"`
+	// Launches are subagents asked for but not yet matched to a running one.
+	Launches []Launch `json:"launches,omitempty"`
 	// SubagentRuns counts subagents started over the session.
 	SubagentRuns int `json:"subagentRuns"`
 	// Compactions counts finished context compactions.
@@ -136,6 +148,21 @@ type Session struct {
 	TodoIDs    map[string]bool `json:"todoIds,omitempty"`
 	// WaitFor is the tool call a waiting session waits on (see Event.WaitFor).
 	WaitFor string `json:"waitFor,omitempty"`
+	// ParentKey is the key of the session that started this one as a subagent
+	// (an OpenCode child session); SubagentType is the agent it runs as.
+	ParentKey    string `json:"parentKey,omitempty"`
+	SubagentType string `json:"subagentType,omitempty"`
+
+	// Context window use, cost and changed lines, from Claude Code's statusLine
+	// command (see statusline.go). MetricsAt is when they last came: a
+	// statusline refresh is no sign of work, so it never touches UpdatedAt.
+	ContextPct    float64    `json:"contextPct,omitempty"` // 0–100
+	ContextTokens int        `json:"contextTokens,omitempty"`
+	ContextLimit  int        `json:"contextLimit,omitempty"`
+	CostUsd       float64    `json:"costUsd,omitempty"`
+	LinesAdded    int        `json:"linesAdded,omitempty"`
+	LinesRemoved  int        `json:"linesRemoved,omitempty"`
+	MetricsAt     *time.Time `json:"metricsAt,omitempty"`
 }
 
 // Subagent is one running subagent of a session.
@@ -143,6 +170,20 @@ type Subagent struct {
 	ID    string    `json:"id"`
 	Type  string    `json:"type"`
 	Since time.Time `json:"since"`
+	// LastSeen is the subagent's last tool call (or its start).
+	LastSeen time.Time `json:"lastSeen,omitempty"`
+	// Desc is what it was started for; Doing its latest tool call; Calls how many.
+	Desc  string `json:"desc,omitempty"`
+	Doing string `json:"doing,omitempty"`
+	Calls int    `json:"calls,omitempty"`
+}
+
+// active is when the subagent last showed it was alive.
+func (a Subagent) active() time.Time {
+	if a.LastSeen.After(a.Since) {
+		return a.LastSeen
+	}
+	return a.Since
 }
 
 // StateChange marks the moment a session entered a state.
@@ -158,6 +199,7 @@ func (s *Session) clone() Session {
 	c.History = append([]HistoryEntry(nil), s.History...)
 	c.Timeline = append([]StateChange(nil), s.Timeline...)
 	c.Subagents = append([]Subagent(nil), s.Subagents...)
+	c.Launches = append([]Launch(nil), s.Launches...)
 	c.TodoIDs = maps.Clone(s.TodoIDs)
 	return c
 }
@@ -169,8 +211,10 @@ const (
 	historyLen    = 30
 	timelineFor   = 24 * time.Hour
 	timelineLen   = 2000
-	// A subagent whose stop never arrived stops being shown after this long.
-	subagentFor  = 2 * time.Hour
+	// A subagent silent for this long (no tool call) stops being shown: its stop
+	// never arrived, or the machine has no SubagentStop hook and it only showed
+	// up through its tool calls.
+	subagentFor  = 20 * time.Minute
 	maxSubagents = 50
 	maxTodoIDs   = 1000
 )
@@ -190,18 +234,23 @@ type Store struct {
 	// names maps a machine as agents report it to the name shown on the page.
 	// Unlike sessions, it never expires.
 	names map[string]string
-	dirty bool
+	// logged is the last cost and context use archived per session key. It
+	// outlives the session, so a session resumed after it expired (its cost
+	// keeps growing from where it was) is not archived twice.
+	logged map[string]metricsMark
+	dirty  bool
 }
 
 // stateFile is the on-disk format. Older versions stored only the session list.
 type stateFile struct {
-	Sessions  []*Session        `json:"sessions"`
-	HostNames map[string]string `json:"hostNames,omitempty"`
+	Sessions  []*Session             `json:"sessions"`
+	HostNames map[string]string      `json:"hostNames,omitempty"`
+	Logged    map[string]metricsMark `json:"metricsLogged,omitempty"`
 }
 
 // NewStore loads state from path if it exists. An empty path disables persistence.
 func NewStore(path string) (*Store, error) {
-	s := &Store{path: path, sessions: map[string]*Session{}, names: map[string]string{}}
+	s := &Store{path: path, sessions: map[string]*Session{}, names: map[string]string{}, logged: map[string]metricsMark{}}
 	if path == "" {
 		return s, nil
 	}
@@ -225,6 +274,7 @@ func NewStore(path string) (*Store, error) {
 		s.sessions[sess.Key] = sess
 	}
 	maps.Copy(s.names, st.HostNames)
+	maps.Copy(s.logged, st.Logged)
 	return s, nil
 }
 
@@ -367,6 +417,7 @@ func (s *Store) Apply(ev Event) (rec Record, ok bool) {
 	}
 	sess.trackSubagent(ev)
 	sess.trackTodo(ev)
+	s.trackChild(sess, ev)
 	sess.addHistory(ev)
 	sess.addTimeline(ev.At)
 	sess.LastEvent = ev.Kind
@@ -388,27 +439,92 @@ func record(ev Event, sess *Session, prev State) Record {
 	}
 }
 
+// trackChild shows an OpenCode child session (a subagent) among its parent's
+// running subagents, like Claude Code's: listed from its creation while it
+// works or waits for you, dropped once it goes idle, fails or ends, and
+// counted once, when the link is first seen. The child keeps its own row,
+// so a child waiting for you still shows as waiting. ev is the event as
+// Apply resolved it.
+func (s *Store) trackChild(child *Session, ev Event) {
+	created := false
+	if ev.ParentID != "" && child.ParentKey == "" {
+		child.ParentKey = ev.Agent + "/" + ev.Host + "/" + ev.ParentID
+		created = true
+	}
+	if child.ParentKey == "" {
+		return
+	}
+	if ev.Subagent != "" {
+		child.SubagentType = ev.Subagent
+	}
+	parent := s.sessions[child.ParentKey]
+	if parent == nil || parent == child {
+		return
+	}
+	if created {
+		parent.SubagentRuns++
+	}
+	i := slices.IndexFunc(parent.Subagents, func(a Subagent) bool { return a.ID == child.SessionID })
+	typ := firstNonEmpty(child.SubagentType, child.Task)
+	switch {
+	// session.created leaves the child idle, but the subagent tool prompts it
+	// right away. A link first seen on a later event (the server missed the
+	// creation) only lists a child that is busy. A repeated session.created
+	// must not drop the child it listed.
+	case ev.Kind == "session.created" && (created || i >= 0),
+		child.State == StateWorking, child.State == StateWaiting:
+		if i < 0 {
+			parent.Subagents = append(parent.Subagents, Subagent{ID: child.SessionID, Since: ev.At})
+			i = len(parent.Subagents) - 1
+		}
+		parent.Subagents[i].Type = typ
+		parent.Subagents[i].LastSeen = ev.At
+	case i < 0:
+		return
+	case ev.State == StateIdle, ev.State == StateError, ev.State == StateEnded:
+		parent.Subagents = slices.Delete(parent.Subagents, i, i+1)
+	default:
+		parent.Subagents[i].LastSeen = ev.At
+	}
+	parent.Subagents = runningSubagents(parent.Subagents, ev.At)
+	if over := len(parent.Subagents) - maxSubagents; over > 0 {
+		parent.Subagents = append([]Subagent(nil), parent.Subagents[over:]...)
+	}
+}
+
 // trackSubagent keeps the list of running subagents. Claude Code sends
 // SubagentStart again when a subagent resumes; one already running is neither
 // listed nor counted twice.
 func (s *Session) trackSubagent(ev Event) {
+	s.trackLaunch(ev)
 	switch {
 	case ev.State == StateEnded:
 		s.Subagents = nil
+		s.Launches = nil
 		return
-	case ev.SubagentStarted:
+	case ev.SubagentStarted, ev.SubagentSeen && ev.SubagentID != "":
 		i := -1
 		if ev.SubagentID != "" {
 			i = slices.IndexFunc(s.Subagents, func(a Subagent) bool { return a.ID == ev.SubagentID })
 		}
+		if i < 0 && ev.SubagentID != "" {
+			s.SubagentRuns++
+			a := Subagent{ID: ev.SubagentID, Type: ev.Subagent, Since: ev.At}
+			a.Desc = s.takeLaunch(ev.SubagentID, ev.Subagent)
+			s.Subagents = append(s.Subagents, a)
+			i = len(s.Subagents) - 1
+		}
 		switch {
 		case i >= 0:
+			a := &s.Subagents[i]
 			if ev.Subagent != "" {
-				s.Subagents[i].Type = ev.Subagent
+				a.Type = ev.Subagent
 			}
-		case ev.SubagentID != "":
-			s.SubagentRuns++
-			s.Subagents = append(s.Subagents, Subagent{ID: ev.SubagentID, Type: ev.Subagent, Since: ev.At})
+			a.LastSeen = ev.At
+			if ev.SubagentDoing != "" {
+				a.Doing = ev.SubagentDoing
+				a.Calls++
+			}
 		default:
 			s.SubagentRuns++ // without an id it can't be listed, only counted
 		}
@@ -426,13 +542,94 @@ func (s *Session) trackSubagent(ev Event) {
 	}
 }
 
-// runningSubagents drops subagents started more than subagentFor before now,
+// Launch is a subagent the main thread asked for, waiting to be matched to the
+// subagent that then starts (its SubagentStart or first tool call).
+type Launch struct {
+	ID   string    `json:"id,omitempty"` // known once the Agent tool returned it
+	Desc string    `json:"desc"`
+	Type string    `json:"type,omitempty"`
+	At   time.Time `json:"at"`
+}
+
+const (
+	launchFor   = 10 * time.Minute // an unmatched launch is forgotten after this
+	maxLaunches = 50
+)
+
+// trackLaunch remembers what each subagent is started for. The Agent tool call
+// names the task; its result names the new subagent's id, which then labels
+// that subagent exactly. Until the id is known, subagents take descriptions in
+// the order they were launched (same agent type first).
+func (s *Session) trackLaunch(ev Event) {
+	if ev.LaunchDesc == "" && ev.LaunchedID == "" {
+		return
+	}
+	s.Launches = slices.DeleteFunc(s.Launches, func(l Launch) bool { return ev.At.Sub(l.At) > launchFor })
+	if ev.LaunchedID != "" {
+		if i := slices.IndexFunc(s.Subagents, func(a Subagent) bool { return a.ID == ev.LaunchedID }); i >= 0 {
+			// Running already, maybe with a guessed description: put the right one
+			// in, and hand the guessed one back to whoever else may need it.
+			if old := s.Subagents[i].Desc; old != ev.LaunchDesc {
+				s.Subagents[i].Desc = ev.LaunchDesc
+				if j := slices.IndexFunc(s.Subagents, func(a Subagent) bool { return a.ID != ev.LaunchedID && a.Desc == ev.LaunchDesc }); j >= 0 {
+					// Another one got this description by guess: it gets the one guessed here.
+					s.Subagents[j].Desc = old
+				} else {
+					s.dropLaunch(ev.LaunchDesc)
+					if old != "" {
+						s.Launches = append(s.Launches, Launch{Desc: old, Type: s.Subagents[i].Type, At: ev.At})
+					}
+				}
+			}
+			return
+		}
+		// Not started yet: keep the launch, now with its id.
+		for i := range s.Launches {
+			if s.Launches[i].ID == "" && s.Launches[i].Desc == ev.LaunchDesc {
+				s.Launches[i].ID = ev.LaunchedID
+				return
+			}
+		}
+		s.Launches = append(s.Launches, Launch{ID: ev.LaunchedID, Desc: ev.LaunchDesc, Type: ev.LaunchType, At: ev.At})
+	} else {
+		s.Launches = append(s.Launches, Launch{Desc: ev.LaunchDesc, Type: ev.LaunchType, At: ev.At})
+	}
+	if over := len(s.Launches) - maxLaunches; over > 0 {
+		s.Launches = append([]Launch(nil), s.Launches[over:]...)
+	}
+}
+
+// takeLaunch gives a newly seen subagent its description: the launch with its
+// id, else the oldest launch of its type without an id, else the oldest one.
+func (s *Session) takeLaunch(id, typ string) string {
+	pick := slices.IndexFunc(s.Launches, func(l Launch) bool { return l.ID == id })
+	if pick < 0 {
+		pick = slices.IndexFunc(s.Launches, func(l Launch) bool { return l.ID == "" && typ != "" && l.Type == typ })
+	}
+	if pick < 0 {
+		pick = slices.IndexFunc(s.Launches, func(l Launch) bool { return l.ID == "" })
+	}
+	if pick < 0 {
+		return ""
+	}
+	d := s.Launches[pick].Desc
+	s.Launches = slices.Delete(s.Launches, pick, pick+1)
+	return d
+}
+
+func (s *Session) dropLaunch(desc string) {
+	if i := slices.IndexFunc(s.Launches, func(l Launch) bool { return l.Desc == desc }); i >= 0 {
+		s.Launches = slices.Delete(s.Launches, i, i+1)
+	}
+}
+
+// runningSubagents drops subagents silent for more than subagentFor,
 // so a stop that never arrived can't keep one listed forever. It returns a new
 // slice; subs is not modified.
 func runningSubagents(subs []Subagent, now time.Time) []Subagent {
 	var out []Subagent
 	for _, a := range subs {
-		if now.Sub(a.Since) <= subagentFor {
+		if now.Sub(a.active()) <= subagentFor {
 			out = append(out, a)
 		}
 	}
@@ -577,7 +774,7 @@ func (s *Store) Save() error {
 		s.mu.Unlock()
 		return nil
 	}
-	st := stateFile{Sessions: make([]*Session, 0, len(s.sessions)), HostNames: maps.Clone(s.names)}
+	st := stateFile{Sessions: make([]*Session, 0, len(s.sessions)), HostNames: maps.Clone(s.names), Logged: maps.Clone(s.logged)}
 	for _, sess := range s.sessions {
 		c := sess.clone()
 		st.Sessions = append(st.Sessions, &c)

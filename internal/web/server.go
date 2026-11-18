@@ -29,6 +29,7 @@ type Server struct {
 	store    *status.Store
 	archive  *status.Archive // nil: events are not archived
 	machines *status.Machines
+	dups     dedupe
 	log      *slog.Logger
 	now      func() time.Time
 }
@@ -41,6 +42,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hook/claude", s.hook(status.ParseClaude))
 	mux.HandleFunc("POST /hook/opencode", s.hook(status.ParseOpenCode))
+	// Claude Code's statusLine JSON: context window use and cost (statusline.go).
+	mux.HandleFunc("POST /hook/statusline", s.statusline)
 	// Sent every minute by each client machine (the installer sets it up).
 	mux.HandleFunc("POST /hook/heartbeat", s.heartbeat)
 	mux.HandleFunc("GET /api/sessions", s.sessions)
@@ -72,13 +75,17 @@ func (s *Server) hook(parse parser) http.HandlerFunc {
 			http.Error(w, "read body", http.StatusBadRequest)
 			return
 		}
+		if !s.dups.fresh(r.URL.Path, hostOf(r), body, s.now()) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		ev, err := parse(hostOf(r), body, s.now())
 		if err != nil {
 			s.log.Warn("bad hook payload", "path", r.URL.Path, "err", err)
 			http.Error(w, "bad payload", http.StatusBadRequest)
 			return
 		}
-		if rec, ok := s.store.Apply(ev); ok && s.archive != nil {
+		if rec, ok := s.store.Apply(ev); ok && s.archive != nil && rec.Worth() {
 			if err := s.archive.Write(rec); err != nil {
 				s.log.Warn("archive event", "err", err)
 			}

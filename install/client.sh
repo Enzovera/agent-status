@@ -4,9 +4,18 @@
 #   curl -fsSL https://raw.githubusercontent.com/Enzovera/agent-status/main/install/client.sh | sh -s -- --server 192.168.1.10
 #
 # Options: --server ADDR (IP, host or host:port), --name NAME (default: hostname),
-#          --skip-claude, --skip-opencode, --skip-heartbeat, --uninstall,
-#          --ref REF (default: main).
+#          --skip-claude, --skip-opencode, --skip-heartbeat, --skip-skill, --skip-statusline,
+#          --uninstall, --ref REF (default: main).
 # Re-running replaces the previous agent-status entries. Needs python3 or node to edit JSON.
+#
+# Skill: with Claude Code, ~/.claude/skills/agent-flow-review/SKILL.md (/agent-flow-review:
+# reads the server's /api/report and suggests workflow fixes and permission rules) with the
+# server address filled in. --skip-skill leaves it alone (install and uninstall).
+#
+# Statusline: with Claude Code, settings.json "statusLine" runs ~/.claude/agent-status/
+# statusline.sh, which sends context window use and cost to the server and then runs
+# your previous statusLine, if any (put back on --uninstall). --skip-statusline leaves it
+# alone (install and uninstall).
 #
 # Heartbeat: the machine shows as online while it POSTs /hook/heartbeat every minute.
 # It is per machine, not per agent, so it is installed even with --skip-claude
@@ -21,6 +30,8 @@ NAME="${NAME%%.*}"
 SKIP_CLAUDE=0
 SKIP_OPENCODE=0
 SKIP_HEARTBEAT=0
+SKIP_SKILL=0
+SKIP_STATUSLINE=0
 UNINSTALL=0
 REF="main"
 
@@ -31,6 +42,8 @@ while [ $# -gt 0 ]; do
     --skip-claude) SKIP_CLAUDE=1; shift ;;
     --skip-opencode) SKIP_OPENCODE=1; shift ;;
     --skip-heartbeat) SKIP_HEARTBEAT=1; shift ;;
+    --skip-skill) SKIP_SKILL=1; shift ;;
+    --skip-statusline) SKIP_STATUSLINE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --ref) REF="$2"; shift 2 ;;
     *) echo "Nieznana opcja: $1" >&2; exit 2 ;;
@@ -54,6 +67,21 @@ elif command -v node >/dev/null 2>&1; then RUNNER=node
 else RUNNER=""
 fi
 
+# fetch_repo_file REL DEST: a file of this repository, from the checkout next to this
+# script (sh install/client.sh) or downloaded from $REPO (curl | sh has no local files).
+fetch_repo_file() {
+  local_src=""
+  case "$0" in
+    *client.sh) local_src="$(dirname "$0")/../$1" ;;
+  esac
+  mkdir -p "$(dirname "$2")"
+  if [ -n "$local_src" ] && [ -f "$local_src" ]; then
+    cp "$local_src" "$2"
+  else
+    curl -fsSL "$REPO/$1" -o "$2"
+  fi
+}
+
 install_claude() {
   settings="$HOME/.claude/settings.json"
   if [ ! -f "$settings" ]; then
@@ -67,7 +95,24 @@ install_claude() {
     echo "Claude Code: brak python3 i node - dopisz ręcznie clients/claude/hooks.json do $settings" >&2
     return 0
   fi
+  # Statusline: the script goes in first; the JSON step below points statusLine at it,
+  # keeping the user's own statusLine as the one it runs next.
+  sl_dir="$HOME/.claude/agent-status"
+  AS_STATUSLINE=0
+  AS_SL_CMD=""
+  if [ "$SKIP_STATUSLINE" = 0 ]; then
+    AS_STATUSLINE=1
+    if [ "$UNINSTALL" = 0 ]; then
+      if fetch_repo_file clients/claude/statusline/statusline.sh "$sl_dir/statusline.sh"; then
+        AS_SL_CMD="sh ~/.claude/agent-status/statusline.sh '$SERVER/hook/statusline?host=$(urlencode "$NAME")'"
+      else
+        AS_STATUSLINE=0
+        echo "UWAGA: statusline: nie udało się pobrać clients/claude/statusline/statusline.sh" >&2
+      fi
+    fi
+  fi
   export AS_SETTINGS="$settings" AS_SERVER="$SERVER" AS_NAME="$NAME" AS_UNINSTALL="$UNINSTALL"
+  export AS_STATUSLINE AS_SL_CMD AS_SL_DIR="$sl_dir"
   if [ "$RUNNER" = python3 ]; then
     python3 - <<'PY'
 import json, os, urllib.parse
@@ -91,6 +136,40 @@ for ev in events + retired:
     if kept: hooks[ev] = kept
     else: hooks.pop(ev, None)
 if not hooks: s.pop("hooks")
+if os.environ.get("AS_STATUSLINE") == "1":
+    d = os.environ["AS_SL_DIR"]
+    nxt, org = os.path.join(d, "statusline-next"), os.path.join(d, "statusline-orig.json")
+    cur = s.get("statusLine")
+    ours_sl = isinstance(cur, dict) and "agent-status/statusline" in str(cur.get("command", ""))
+    if os.environ["AS_UNINSTALL"] == "1":
+        if ours_sl:
+            if os.path.exists(org):
+                with open(org, encoding="utf-8") as f:
+                    s["statusLine"] = json.load(f)
+                print("Statusline: przywrócono Twój poprzedni statusLine")
+            else:
+                s.pop("statusLine")
+                print("Statusline: usunięto")
+    else:
+        cmd = os.environ["AS_SL_CMD"]
+        chained = False
+        if ours_sl:
+            cur["command"] = cmd
+            chained = os.path.exists(nxt)
+        elif isinstance(cur, dict):
+            with open(nxt, "w", encoding="utf-8") as f:
+                f.write(str(cur.get("command", "")))
+            with open(org, "w", encoding="utf-8") as f:
+                json.dump(cur, f, indent=2, ensure_ascii=False)
+            new = dict(cur)
+            new["type"], new["command"] = "command", cmd
+            s["statusLine"] = new
+            chained = True
+        else:
+            for p in (nxt, org):
+                if os.path.exists(p): os.remove(p)
+            s["statusLine"] = {"type": "command", "command": cmd}
+        print("Statusline: kontekst i koszt sesji wysyłane na serwer" + (" (Twój poprzedni statusline działa dalej)" if chained else ""))
 with open(path, "w", encoding="utf-8") as f:
     json.dump(s, f, indent=2, ensure_ascii=False)
     f.write("\n")
@@ -117,8 +196,45 @@ for (const ev of [...events, ...retired]) {
   else delete hooks[ev]
 }
 if (!Object.keys(hooks).length) delete s.hooks
+if (process.env.AS_STATUSLINE === "1") {
+  const d = process.env.AS_SL_DIR
+  const nxt = `${d}/statusline-next`, org = `${d}/statusline-orig.json`
+  const cur = s.statusLine
+  const oursSl = cur && typeof cur === "object" && String(cur.command ?? "").includes("agent-status/statusline")
+  if (process.env.AS_UNINSTALL === "1") {
+    if (oursSl) {
+      if (fs.existsSync(org)) {
+        s.statusLine = JSON.parse(fs.readFileSync(org, "utf8"))
+        console.log("Statusline: przywrócono Twój poprzedni statusLine")
+      } else {
+        delete s.statusLine
+        console.log("Statusline: usunięto")
+      }
+    }
+  } else {
+    const cmd = process.env.AS_SL_CMD
+    let chained = false
+    if (oursSl) {
+      cur.command = cmd
+      chained = fs.existsSync(nxt)
+    } else if (cur && typeof cur === "object") {
+      fs.writeFileSync(nxt, String(cur.command ?? ""))
+      fs.writeFileSync(org, JSON.stringify(cur, null, 2) + "\n")
+      s.statusLine = { ...cur, type: "command", command: cmd }
+      chained = true
+    } else {
+      for (const p of [nxt, org]) if (fs.existsSync(p)) fs.rmSync(p)
+      s.statusLine = { type: "command", command: cmd }
+    }
+    console.log("Statusline: kontekst i koszt sesji wysyłane na serwer" + (chained ? " (Twój poprzedni statusline działa dalej)" : ""))
+  }
+}
 fs.writeFileSync(path, JSON.stringify(s, null, 2) + "\n")
 JS
+  fi
+  if [ "$UNINSTALL" = 1 ] && [ "$AS_STATUSLINE" = 1 ]; then
+    rm -f "$sl_dir/statusline.sh" "$sl_dir/statusline.ps1" "$sl_dir/statusline-next" "$sl_dir/statusline-orig.json"
+    rmdir "$sl_dir" 2>/dev/null || true
   fi
   if [ "$UNINSTALL" = 1 ]; then echo "Claude Code: usunięto hooki z $settings"
   else echo "Claude Code: hooki dopisane do $settings (kopia: settings.json.bak)"; fi
@@ -142,6 +258,37 @@ install_opencode() {
       "$tmp" > "$path"
   rm -f "$tmp"
   echo "OpenCode: plugin zapisany w $path"
+}
+
+SKILL_NAME="agent-flow-review"
+
+# From a local checkout (sh install/client.sh) the template next to the script is used;
+# piped from curl ($0 is the shell) it is downloaded from $REPO.
+install_skill() {
+  dir="$HOME/.claude/skills/$SKILL_NAME"
+  path="$dir/SKILL.md"
+  if [ "$UNINSTALL" = 1 ]; then
+    if [ -f "$path" ]; then rm -f "$path" && echo "Skill: usunięto $path"; fi
+    rmdir "$dir" 2>/dev/null || true
+    return 0
+  fi
+  local_src=""
+  case "$0" in
+    *client.sh) local_src="$(dirname "$0")/../clients/claude/skills/$SKILL_NAME/SKILL.md" ;;
+  esac
+  tmp="$(mktemp)"
+  if [ -n "$local_src" ] && [ -f "$local_src" ]; then
+    cp "$local_src" "$tmp"
+  elif ! curl -fsSL "$REPO/clients/claude/skills/$SKILL_NAME/SKILL.md" -o "$tmp"; then
+    rm -f "$tmp"
+    echo "UWAGA: skill: nie udało się pobrać $REPO/clients/claude/skills/$SKILL_NAME/SKILL.md" >&2
+    return 0
+  fi
+  mkdir -p "$dir"
+  esc_server=$(printf '%s' "$SERVER" | sed 's/[\/&|]/\\&/g')
+  sed -e "s|http://SERVER:7777|$esc_server|g" "$tmp" > "$path"
+  rm -f "$tmp"
+  echo "Skill: zapisany w $path - w Claude Code: /$SKILL_NAME (analiza statystyk i rekomendacje)"
 }
 
 HB_LABEL="com.agent-status.heartbeat"
@@ -299,6 +446,7 @@ install_heartbeat() {
 
 if [ "$SKIP_CLAUDE" = 0 ] && { [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; }; then
   install_claude
+  if [ "$SKIP_SKILL" = 0 ]; then install_skill; else echo "Skill: pominięto (--skip-skill)"; fi
 else
   echo "Claude Code: pominięto (nie znaleziono)"
 fi

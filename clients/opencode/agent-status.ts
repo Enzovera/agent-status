@@ -44,6 +44,9 @@ export default Plugin.define({
     const controller = new AbortController()
     // session.tool.called carries no tool name; remember it from input.started.
     const toolNames = new Map<string, string>()
+    // The subagent tool runs each subagent as a child session; only its
+    // session.created names the parent, so repeat that on the child's events.
+    const parents = new Map<string, string>()
 
     const send = (type: string, directory: string | undefined, data: any) =>
       // Fire and forget: a dead server must never slow the session down.
@@ -57,8 +60,15 @@ export default Plugin.define({
     void (async () => {
       for await (const event of ctx.event.subscribe({ types: TYPES, signal: controller.signal })) {
         const e = event as any
+        // Some OpenCode versions ignore the types filter and deliver every event,
+        // streamed reasoning included; never forward those.
+        if (!(TYPES as readonly string[]).includes(e.type)) continue
         const data = { ...(e.data ?? {}) }
         const directory = e.location?.directory ?? data.location?.directory
+        const sessionID = data.sessionID ?? data.form?.sessionID
+        if (e.type === "session.created" && data.parentID) parents.set(data.sessionID, data.parentID)
+        else if (sessionID && data.parentID == null && parents.has(sessionID)) data.parentID = parents.get(sessionID)
+        if (e.type === "session.deleted") parents.delete(sessionID)
 
         switch (e.type) {
           case "session.tool.input.started":

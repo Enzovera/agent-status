@@ -30,6 +30,9 @@ API:
 | `GET /api/stats` | statystyki jako JSON |
 | `GET /api/report` | te same statystyki jako raport Markdown pisany dla agenta AI, który ma pomóc usprawnić pracę z agentami: definicje miar, liczby, fakty do analizy (np. najczęstsze prośby o zgodę jako kandydaci do allowlisty) |
 | `GET /api/events` | surowe zdarzenia z archiwum (JSON lines); filtry `host=`, `project=`, `key=` |
+| `POST /hook/statusline?host=` | dane ze statusline'u Claude Code (zapełnienie kontekstu, koszt, zmienione linie); wysyła je skrypt instalowany jako statusline |
+
+Identyczne zdarzenie z tej samej maszyny, które przyjdzie ponownie w ciągu 2 s, jest pomijane (OpenCode potrafi uruchomić plugin kilka razy i wysłać każde zdarzenie wielokrotnie).
 
 Okres dla trzech ostatnich: `?days=7` (domyślnie) albo `?from=2026-11-01&to=2026-11-15` (data lub RFC3339). Żeby agent przeanalizował Twoją pracę, daj mu np. `http://<IP serwera>:7777/api/report?days=14`.
 
@@ -37,11 +40,14 @@ Nazwę maszyny można zmienić na stronie („zmień nazwę” w nagłówku masz
 
 ### Strona na tablecie lub drugim ekranie
 
-Przyciski w nagłówku są pomyślane pod ekran, który stoi obok i na który tylko zerkasz:
+Nagłówek to jeden pasek ikon (opis po przytrzymaniu kursora; na szerokim ekranie przy ikonach układu są też słowa): układ listy (maszyna / projekt / kolejka), zakres osi czasu, dźwięk, statystyki i menu **⋯** z rzadziej używanymi przełącznikami i legendą kolorów. Na telefonie zakres osi czasu też jest w menu ⋯, żeby pasek zmieścił się w jednej linii.
 
-- **dźwięk** — krótki sygnał, gdy sesja zaczyna czekać na Ciebie, ma błąd, traci sygnał albo kończy pracę. Gra też wtedy, gdy strona jest na wierzchu (powiadomienia w takiej sytuacji się nie pokazują). Po przeładowaniu strony przeglądarka wstrzymuje dźwięk do pierwszego dotknięcia — przycisk pokazuje wtedy „dźwięk: dotknij”.
-- **nie wygaszaj** — ekran nie gaśnie, dopóki strona jest widoczna.
-- **pełny ekran** — bez pasków przeglądarki.
+- **dźwięk** (głośnik) — krótki sygnał, gdy sesja zaczyna czekać na Ciebie, ma błąd, traci sygnał albo kończy pracę. Gra też wtedy, gdy strona jest na wierzchu (powiadomienia w takiej sytuacji się nie pokazują). Po przeładowaniu strony przeglądarka wstrzymuje dźwięk do pierwszego dotknięcia — ikona jest wtedy pomarańczowa.
+- **⋯ → nie wygaszaj ekranu** — ekran nie gaśnie, dopóki strona jest widoczna.
+- **⋯ → pełny ekran** — bez pasków przeglądarki.
+- **⋯ → pokaż zakończone / usuń zakończone z listy**, **powiadomienia**.
+
+Gdy sesja czeka dłużej niż 5 minut, ramka zaczyna pulsować, a przy włączonym dźwięku sygnał powtarza się co 5 minut, dopóki czeka. Sesje gotowe lub zakończone od ponad godziny zwijają się na dole sekcji do jednej linii „starsze: N”, którą można rozwinąć.
 
 Gdy coś czeka na Ciebie, cały ekran dostaje czerwoną ramkę, a nad listą pojawia się duży pasek z liczbą sesji i tym, jak długo czeka najdłużej (pomarańczowy, gdy sesja ma błąd albo straciła sygnał). Dotknięcie paska przełącza na widok „kolejka”, gdzie czekające sesje są ułożone od najdłużej czekającej. Wiersz sesji pokazuje, od kiedy czeka, ma błąd albo jest gotowa („od 7 min”); pracującej — kiedy ostatnio się odezwała. Na ekranie dotykowym przyciski są większe.
 
@@ -84,9 +90,15 @@ Opcje:
 | `-SkipClaude` | `--skip-claude` | nie ruszaj Claude Code |
 | `-SkipOpenCode` | `--skip-opencode` | nie ruszaj OpenCode |
 | `-SkipHeartbeat` | `--skip-heartbeat` | nie ruszaj heartbeatu (maszyna nie będzie pokazywana jako online/offline) |
+| `-SkipSkill` | `--skip-skill` | nie instaluj / nie usuwaj skilla `/agent-flow-review` |
+| `-SkipStatusline` | `--skip-statusline` | nie ruszaj statusline'u Claude Code (bez zapełnienia kontekstu i kosztu na stronie) |
 | `-Uninstall` | `--uninstall` | usuń wpisy agent-status (hooki, plugin, heartbeat) |
 
-Ponowne uruchomienie instalatora podmienia poprzednie wpisy (np. po zmianie adresu serwera albo gdy doszły nowe hooki). Instalator dotyka tylko hooków kierujących na `/hook/claude`, pliku `agent-status.ts` i zadania heartbeatu.
+Ponowne uruchomienie instalatora podmienia poprzednie wpisy (np. po zmianie adresu serwera albo gdy doszły nowe hooki). Instalator dotyka tylko hooków kierujących na `/hook/claude`, pliku `agent-status.ts`, zadania heartbeatu, katalogu `~/.claude/skills/agent-flow-review`, katalogu `~/.claude/agent-status` i `statusLine` w `settings.json` (tylko gdy jest to statusline agent-status).
+
+**Statusline.** Hooki nie podają zapełnienia kontekstu ani kosztu, za to statusline Claude Code dostaje je przy każdym odświeżeniu. Instalator ustawia w `settings.json` `statusLine` na skrypt `~/.claude/agent-status/statusline.sh` (macOS, Linux, Windows z Git Bash) albo `statusline.ps1` (Windows bez Git Bash). Skrypt wysyła te dane w tle na serwer (`/hook/statusline`), a potem uruchamia Twój dotychczasowy statusline z tymi samymi danymi. Jeśli go nie było, wypisuje krótką linię „Opus · kontekst 64% · $0.87”. Twój poprzedni `statusLine` jest zapisany w `~/.claude/agent-status/statusline-orig.json` i wraca przy `-Uninstall` / `--uninstall`. Na stronie sesja dostaje znacznik „kontekst NN%” (pomarańczowy od 70%, czerwony od 85%), a w szczegółach koszt i zmienione linie. Statystyki liczą koszt na projekt, maszynę, model i dzień. Statusline ustawiony w projekcie (`.claude/settings.json`) ma pierwszeństwo, więc w takim projekcie dane nie są wysyłane.
+
+**Skill do analizy flow.** Gdy jest Claude Code, instalator zapisuje też skill `~/.claude/skills/agent-flow-review/SKILL.md` z wpisanym adresem serwera. W Claude Code wpisz `/agent-flow-review` (opcjonalnie liczbę dni albo zakres dat, np. `/agent-flow-review 30` lub `/agent-flow-review 2026-11-01 2026-11-15`) albo poproś „przeanalizuj mój flow”. Agent pobiera `/api/report` przez `curl` i podaje po polsku rekomendacje oparte na liczbach: gdzie agenci czekają na Ciebie, ile sesji naraz ma sens, gdzie są błędy i kompaktowania, oraz gotowe reguły `permissions.allow` dla powtarzających się próśb o zgodę (ryzykownych poleceń nie proponuje). Ustawień nie zmienia bez Twojej zgody; przed zmianą robi kopię `settings.json.bak-agent-flow`. Skill ma z góry zgodę tylko na `curl` do `/api/…` Twojego serwera.
 
 **Heartbeat.** Instalator ustawia też lekkie zadanie, które co minutę (i zaraz po zalogowaniu / starcie) wysyła `POST /hook/heartbeat?host=NAZWA` — dzięki temu strona pokazuje, czy maszyna jest włączona (offline po 3 minutach ciszy). Heartbeat dotyczy maszyny, nie agenta, więc instaluje się także z `-SkipClaude -SkipOpenCode`. Na Windows to zadanie `agent-status-heartbeat` w Harmonogramie zadań bieżącego użytkownika (ukryte `curl.exe`, bez uprawnień administratora); na macOS LaunchAgent `~/Library/LaunchAgents/com.agent-status.heartbeat.plist`; na Linuksie wpis w `crontab` użytkownika oznaczony `# agent-status-heartbeat`, a gdy `crontab` nie ma — timer `systemctl --user` `agent-status-heartbeat.timer` (bez `loginctl enable-linger` działa tylko, gdy jesteś zalogowany).
 
@@ -95,6 +107,8 @@ Ponowne uruchomienie instalatora podmienia poprzednie wpisy (np. po zmianie adre
 **Claude Code:** dopisz zawartość [`clients/claude/hooks.json`](clients/claude/hooks.json) do `~/.claude/settings.json` (klucz `hooks`; jeśli już istnieje, połącz listy). Podmień `SERVER` na IP serwera, a `HOST` na nazwę maszyny, którą chcesz widzieć na stronie (bez `?host=` serwer pokaże IP).
 
 Hooki są typu `http` z limitem 2 s; gdy serwer nie działa, Claude Code pokazuje nieblokujący „hook error” i pracuje dalej. Gdy maszyna serwera jest wyłączona (a nie tylko serwer), każde wywołanie narzędzia może czekać do 2 s na `PreToolUse` i drugie tyle na `PostToolUse`. `SessionStart` nie jest używany: Claude Code nie przyjmuje dla niego hooków `http`, więc sesja pojawia się na stronie przy pierwszym poleceniu.
+
+**Skill:** skopiuj [`clients/claude/skills/agent-flow-review/SKILL.md`](clients/claude/skills/agent-flow-review/SKILL.md) do `~/.claude/skills/agent-flow-review/` i podmień `http://SERVER:7777` na adres serwera.
 
 **OpenCode:** skopiuj [`clients/opencode/agent-status.ts`](clients/opencode/agent-status.ts) do `~/.config/opencode/plugins/` i podmień `SERVER` (albo ustaw zmienną `AGENT_STATUS_URL`). Nazwa maszyny to `hostname()`, nadpisywana przez `AGENT_STATUS_HOST`.
 
@@ -107,7 +121,8 @@ Plugin OpenCode jest dla OpenCode 2.x (`@opencode/plugin`, API `Plugin.define` /
 - tytuł sesji, model i katalog,
 - treść poleceń (`session.inbox.enqueued`) i ostatni tekst odpowiedzi (`session.text.ended`), oba przycięte do 4000 znaków,
 - wywołania narzędzi z nazwą i krótkim opisem: z argumentów idą tylko `description`, ścieżka, `pattern`, `url`, `command`, `query`, nigdy treść plików ani łatek,
-- prośby o zgodę, pytania agenta (`form.*`), błędy i przerwania.
+- prośby o zgodę, pytania agenta (`form.*`), błędy i przerwania,
+- przy sesjach podagentów (narzędzie `subagent` tworzy sesję potomną) — id sesji nadrzędnej i nazwę agenta; strona pokazuje je jako podagentów sesji nadrzędnej i rysuje ich wiersze pod nią.
 
 OpenCode 1.x ma inny format pluginów i ten plugin tam nie zadziała.
 

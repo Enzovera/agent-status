@@ -186,9 +186,13 @@ type Group struct {
 	Errors        int     `json:"errors"`
 	Compactions   int     `json:"compactions"`
 	Interruptions int     `json:"interruptions"`
+	// CostUsd is what Claude Code estimated the slice cost (statusline
+	// records, see cost.go); 0 without them.
+	CostUsd float64 `json:"costUsd"`
 
 	keys                     map[string]bool
 	work, wait, idle, errSec float64
+	cost                     float64
 	lat                      samples
 }
 
@@ -281,8 +285,11 @@ type SessionRow struct {
 	Errors         int       `json:"errors"`
 	Compactions    int       `json:"compactions"`
 	Interruptions  int       `json:"interruptions"`
+	// CostUsd: cost in the period; ContextPct: the last context use seen.
+	CostUsd    float64 `json:"costUsd,omitempty"`
+	ContextPct float64 `json:"contextPct,omitempty"`
 
-	work, wait, idle float64
+	work, wait, idle, cost float64
 }
 
 // Load reads the archive in dir for the period (plus Lookback) and computes.
@@ -534,6 +541,10 @@ func (c *calc) replay(key string, recs []status.Record) {
 		c.endWait(s, waitRec, waitAt, at)
 	}
 	for _, r := range recs {
+		if r.Kind == status.KindStatusline {
+			c.cost(s, r) // metrics only: no state, no activity
+			continue
+		}
 		next := r.State
 		if next == "" {
 			next = cur
@@ -628,6 +639,7 @@ func (c *calc) replay(key string, recs []status.Record) {
 		s.row.Key, s.row.Agent, s.row.Host, s.row.Project = s.key, s.agent, s.host, s.project
 		s.row.HostLabel = c.opt.HostNames[s.host]
 		s.row.Model, s.row.Title, s.row.LastState = s.model, s.title, string(cur)
+		s.row.CostUsd = roundCost(s.row.cost)
 		c.sessions = append(c.sessions, s)
 	}
 }
@@ -822,6 +834,11 @@ func (c *calc) record(s *sess, r status.Record) {
 		s.compactPost = append(s.compactPost, compaction{r.At, r.Reason})
 	case "SubagentStart":
 		c.subagents[firstNonEmpty(r.Subagent, "(bez typu)")]++
+	case "session.created":
+		// OpenCode runs a subagent as a child session; its creation names the agent.
+		if r.Subagent != "" {
+			c.subagents[r.Subagent]++
+		}
 	case "TaskCreated":
 		c.todosCreated++
 	case "TaskCompleted":
@@ -963,6 +980,7 @@ func (g *Group) finish() {
 	g.WorkingSec, g.WaitingSec, g.IdleSec, g.ErrorSec = secs(g.work), secs(g.wait), secs(g.idle), secs(g.errSec)
 	g.WaitShare = ratio(g.wait, g.work+g.wait)
 	g.Waits = g.lat.dist()
+	g.CostUsd = roundCost(g.cost)
 }
 
 func (t *TimeGroup) finish() {

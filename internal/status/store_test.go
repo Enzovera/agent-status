@@ -363,7 +363,8 @@ func TestStoreSubagents(t *testing.T) {
 	ev(3, start("a1", "Explore")) // resumed: neither listed nor counted twice
 	ev(4, stop("unknown"))        // internal agents stop without a start
 	sess := s.List(t0.Add(5 * time.Minute))[0]
-	if sess.SubagentRuns != 2 || len(sess.Subagents) != 2 || sess.Subagents[0] != (Subagent{ID: "a1", Type: "Explore", Since: t0.Add(time.Minute)}) {
+	if sess.SubagentRuns != 2 || len(sess.Subagents) != 2 ||
+		sess.Subagents[0] != (Subagent{ID: "a1", Type: "Explore", Since: t0.Add(time.Minute), LastSeen: t0.Add(3 * time.Minute)}) {
 		t.Fatalf("runs=%d running=%+v", sess.SubagentRuns, sess.Subagents)
 	}
 	if sess.State != StateWorking || sess.Detail != "podagent: Explore" {
@@ -563,5 +564,202 @@ func TestPermissionWaitEndsWithItsTool(t *testing.T) {
 	post(`{"session_id":"a","hook_event_name":"PostToolUse","tool_name":"AskUserQuestion","duration_ms":9000}`, t0.Add(30*time.Second))
 	if st := state(); st.State != StateWorking {
 		t.Fatalf("answered question: %s", st.State)
+	}
+}
+
+// Without SubagentStart/SubagentStop hooks a subagent still shows up through
+// its tool calls, and drops off once it has been silent for subagentFor.
+func TestSubagentSeenFromToolCalls(t *testing.T) {
+	t0 := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	post := func(body string, at time.Time) {
+		ev, err := ParseClaude("pc", []byte(body), at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Apply(ev)
+	}
+	post(`{"session_id":"a","hook_event_name":"UserPromptSubmit","prompt":"x"}`, t0)
+	post(`{"session_id":"a","hook_event_name":"PreToolUse","tool_name":"Grep","agent_id":"ag1","agent_type":"Explore","tool_input":{"pattern":"foo"}}`, t0.Add(time.Second))
+	post(`{"session_id":"a","hook_event_name":"PreToolUse","tool_name":"Read","agent_id":"ag1","agent_type":"Explore","tool_input":{"file_path":"x.go"}}`, t0.Add(10*time.Minute))
+
+	got := s.List(t0.Add(11 * time.Minute))[0]
+	if len(got.Subagents) != 1 || got.Subagents[0].Type != "Explore" || got.SubagentRuns != 1 {
+		t.Fatalf("subagents = %+v, runs = %d", got.Subagents, got.SubagentRuns)
+	}
+	if got.Detail != "Explore › Read: x.go" {
+		t.Errorf("detail = %q", got.Detail)
+	}
+	// Still listed 15 min after its last tool call, gone after subagentFor.
+	if l := s.List(t0.Add(25 * time.Minute))[0].Subagents; len(l) != 1 {
+		t.Errorf("dropped too early: %+v", l)
+	}
+	if l := s.List(t0.Add(10*time.Minute + subagentFor + time.Second))[0].Subagents; len(l) != 0 {
+		t.Errorf("silent subagent still listed: %+v", l)
+	}
+}
+
+func TestRecordWorth(t *testing.T) {
+	if (Record{Kind: "session.reasoning.delta", State: StateWorking, Prev: StateWorking}).Worth() {
+		t.Error("a no-op event should not be archived")
+	}
+	for _, r := range []Record{
+		{Kind: "x", State: StateIdle, Prev: StateWorking},
+		{Kind: "PreToolUse", State: StateWorking, Prev: StateWorking, Tool: "Bash"},
+		{Kind: "PostToolUse", State: StateWorking, Prev: StateWorking, Reason: "Bash", DurationMs: 5},
+	} {
+		if !r.Worth() {
+			t.Errorf("should be archived: %+v", r)
+		}
+	}
+}
+
+// OpenCode runs a subagent as a child session: session.created names the
+// parent, the plugin repeats parentID on the child's later events.
+func TestOpenCodeChildSession(t *testing.T) {
+	t0 := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	n := 0
+	send := func(typ, data string) {
+		t.Helper()
+		n++
+		ev, err := ParseOpenCode("ip", []byte(`{"host":"mac","directory":"/src/app","type":"`+typ+`","data":`+data+`}`), t0.Add(time.Duration(n)*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Apply(ev)
+	}
+	get := func(id string) Session {
+		t.Helper()
+		for _, x := range s.List(t0.Add(time.Duration(n) * time.Second)) {
+			if x.SessionID == id {
+				return x
+			}
+		}
+		t.Fatalf("no session %q", id)
+		return Session{}
+	}
+
+	send("session.execution.started", `{"sessionID":"P"}`)
+	send("session.tool.called", `{"sessionID":"P","id":"t1","name":"subagent","input":{"description":"Find handlers"}}`)
+	send("session.created", `{"sessionID":"C","parentID":"P","title":"Find handlers","agent":"explore"}`)
+	send("session.created", `{"sessionID":"C","parentID":"P","title":"Find handlers","agent":"explore"}`) // repeated delivery
+
+	c := get("C")
+	if c.ParentKey != "opencode/mac/P" || c.SubagentType != "explore" || c.Task != "Find handlers" {
+		t.Errorf("child = %+v", c)
+	}
+	p := get("P")
+	if p.SubagentRuns != 1 || len(p.Subagents) != 1 || p.Subagents[0].ID != "C" || p.Subagents[0].Type != "explore" {
+		t.Fatalf("parent after create: runs %d, subagents %+v", p.SubagentRuns, p.Subagents)
+	}
+	if p.ParentKey != "" {
+		t.Errorf("parent has a parent: %q", p.ParentKey)
+	}
+	since := p.Subagents[0].Since
+
+	send("session.execution.started", `{"sessionID":"C","parentID":"P"}`)
+	send("session.tool.called", `{"sessionID":"C","parentID":"P","id":"t2","name":"grep","input":{"pattern":"auth"}}`)
+	// The parent goes idle while its subagent keeps working in the background.
+	send("session.execution.succeeded", `{"sessionID":"P"}`)
+	send("permission.asked", `{"sessionID":"C","parentID":"P","action":"bash","resources":["ls"]}`)
+	c, p = get("C"), get("P")
+	if c.State != StateWaiting {
+		t.Errorf("waiting child state = %s", c.State)
+	}
+	if p.State != StateIdle || len(p.Subagents) != 1 || !p.Subagents[0].Since.Equal(since) || !p.Subagents[0].LastSeen.After(since) {
+		t.Errorf("parent while child waits: state %s, subagents %+v", p.State, p.Subagents)
+	}
+
+	send("permission.replied", `{"sessionID":"C","parentID":"P","reply":"once"}`)
+	send("session.execution.succeeded", `{"sessionID":"C","parentID":"P"}`)
+	if p = get("P"); len(p.Subagents) != 0 || p.SubagentRuns != 1 {
+		t.Errorf("after child finished: runs %d, subagents %+v", p.SubagentRuns, p.Subagents)
+	}
+
+	// A follow-up to the same child lists it again but is not a new run.
+	send("session.execution.started", `{"sessionID":"C","parentID":"P"}`)
+	if p = get("P"); len(p.Subagents) != 1 || p.SubagentRuns != 1 {
+		t.Errorf("follow-up: runs %d, subagents %+v", p.SubagentRuns, p.Subagents)
+	}
+	send("session.execution.failed", `{"sessionID":"C","parentID":"P","error":{"message":"boom"}}`)
+	if p = get("P"); len(p.Subagents) != 0 {
+		t.Errorf("failed child still listed: %+v", p.Subagents)
+	}
+
+	// Without the parentID repeated (an older plugin), the stored link still works.
+	send("session.created", `{"sessionID":"D","parentID":"P","title":"Review","agent":"general"}`)
+	send("session.execution.started", `{"sessionID":"D"}`)
+	if p = get("P"); p.SubagentRuns != 2 || len(p.Subagents) != 1 || p.Subagents[0].ID != "D" {
+		t.Errorf("second child: runs %d, subagents %+v", p.SubagentRuns, p.Subagents)
+	}
+	send("session.deleted", `{"sessionID":"D"}`)
+	if p = get("P"); len(p.Subagents) != 0 {
+		t.Errorf("deleted child still listed: %+v", p.Subagents)
+	}
+
+	// A link first seen on an idle event (the creation was missed) counts the
+	// run but lists nothing; an unknown parent is left alone.
+	send("session.idle", `{"sessionID":"E","parentID":"P"}`)
+	send("session.execution.started", `{"sessionID":"F","parentID":"nobody"}`)
+	if p = get("P"); p.SubagentRuns != 3 || len(p.Subagents) != 0 {
+		t.Errorf("late link: runs %d, subagents %+v", p.SubagentRuns, p.Subagents)
+	}
+	if f := get("F"); f.ParentKey != "opencode/mac/nobody" || f.State != StateWorking {
+		t.Errorf("orphan child = %+v", f)
+	}
+}
+
+// Claude Code sessions never get a parent; their subagents stay in the list.
+func TestClaudeHasNoParentKey(t *testing.T) {
+	t0 := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	s.Apply(Event{Agent: "claude", Host: "pc", SessionID: "a", Kind: "SubagentStart", Subagent: "Explore", SubagentID: "x", SubagentStarted: true, At: t0})
+	got := s.List(t0)[0]
+	if got.ParentKey != "" || got.SubagentType != "" || len(got.Subagents) != 1 {
+		t.Errorf("claude session = %+v", got)
+	}
+}
+
+// Each subagent gets the task it was started for and shows its latest tool call.
+// Several launched at once take descriptions in launch order until the Agent
+// tool's result names the exact id.
+func TestSubagentDescriptions(t *testing.T) {
+	t0 := time.Date(2026, 11, 18, 23, 24, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	post := func(body string, sec int) {
+		ev, err := ParseClaude("mac", []byte(body), t0.Add(time.Duration(sec)*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Apply(ev)
+	}
+	post(`{"session_id":"m","hook_event_name":"UserPromptSubmit","prompt":"zrob review PR"}`, 0)
+	post(`{"session_id":"m","hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"description":"Review PR 84","subagent_type":"general-purpose"}}`, 1)
+	post(`{"session_id":"m","hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"description":"Review PR 85","subagent_type":"general-purpose"}}`, 1)
+	// Started in the opposite order; the guess (launch order) is wrong at first.
+	post(`{"session_id":"m","hook_event_name":"SubagentStart","agent_id":"bbbbbbbbbbbbbbbb2","agent_type":"general-purpose"}`, 2)
+	post(`{"session_id":"m","hook_event_name":"SubagentStart","agent_id":"aaaaaaaaaaaaaaaa1","agent_type":"general-purpose"}`, 2)
+	post(`{"session_id":"m","hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"description":"Review PR 84","subagent_type":"general-purpose"},"tool_response":"Async agent launched successfully.\nagentId: aaaaaaaaaaaaaaaa1 (internal ID)"}`, 3)
+	post(`{"session_id":"m","hook_event_name":"PreToolUse","tool_name":"Bash","agent_id":"bbbbbbbbbbbbbbbb2","agent_type":"general-purpose","tool_input":{"command":"gh pr view 85"}}`, 4)
+	// A subagent's report handed back as a prompt is not the user's prompt.
+	post(`{"session_id":"m","hook_event_name":"UserPromptSubmit","prompt":"<agent-message from=\"b\"> report"}`, 5)
+
+	sess := s.List(t0.Add(time.Minute))[0]
+	desc := map[string]Subagent{}
+	for _, a := range sess.Subagents {
+		desc[a.ID] = a
+	}
+	if desc["aaaaaaaaaaaaaaaa1"].Desc != "Review PR 84" || desc["bbbbbbbbbbbbbbbb2"].Desc != "Review PR 85" {
+		t.Errorf("descriptions: %+v", sess.Subagents)
+	}
+	if desc["bbbbbbbbbbbbbbbb2"].Doing != "Bash: gh pr view 85" || desc["bbbbbbbbbbbbbbbb2"].Calls != 1 {
+		t.Errorf("activity of b: %+v", desc["bbbbbbbbbbbbbbbb2"])
+	}
+	if len(sess.Launches) != 0 {
+		t.Errorf("launches left: %+v", sess.Launches)
+	}
+	if sess.Task != "zrob review PR" || sess.Prompts != 1 {
+		t.Errorf("task %q prompts %d", sess.Task, sess.Prompts)
 	}
 }

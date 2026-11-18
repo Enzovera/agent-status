@@ -3,6 +3,7 @@ package status
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -20,6 +21,7 @@ type claudePayload struct {
 	SessionTitle         string          `json:"session_title"`
 	ToolName             string          `json:"tool_name"`
 	ToolInput            json.RawMessage `json:"tool_input"`
+	ToolResponse         json.RawMessage `json:"tool_response"`
 	NotificationType     string          `json:"notification_type"`
 	Message              string          `json:"message"`
 	LastAssistantMessage string          `json:"last_assistant_message"`
@@ -110,6 +112,11 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		ev.Reason = p.Source
 	case "UserPromptSubmit":
 		ev.State = StateWorking
+		if injected(p.Prompt) {
+			// A subagent's report or a notification handed to the session as a
+			// "prompt": work goes on, but it is not yours and not the title.
+			break
+		}
 		if ev.Task == "" {
 			ev.Task = clip(p.Prompt)
 		}
@@ -118,6 +125,16 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		ev.State = StateWorking
 		ev.Detail = toolDetail(p.ToolName, p.ToolInput)
 		ev.Tool = clip(p.ToolName)
+		if p.AgentID == "" && isAgentTool(p.ToolName) {
+			ev.LaunchDesc, ev.LaunchType = launchOf(p.ToolInput)
+		}
+		if p.AgentID != "" {
+			// A subagent's tool call: it shows the subagent is running even
+			// where the SubagentStart/SubagentStop hooks are not installed.
+			ev.SubagentID, ev.Subagent, ev.SubagentSeen = p.AgentID, clip(p.AgentType), true
+			ev.SubagentDoing = ev.Detail
+			ev.Detail = clip(firstNonEmpty(p.AgentType, "podagent") + " › " + ev.Detail)
+		}
 		if q, ask := userQuestion(p.ToolName, p.ToolInput); q != "" {
 			if ask {
 				// Asked in the closing box: the turn goes on until Stop.
@@ -136,11 +153,19 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		ev.Reason = clip(p.ToolName)
 		ev.DurationMs = int64(p.DurationMs)
 		ev.Resolves = waitKey(p.AgentID, p.ToolName)
+		ev.SubagentID, ev.Subagent, ev.SubagentSeen = p.AgentID, clip(p.AgentType), p.AgentID != ""
+		if p.AgentID == "" && isAgentTool(p.ToolName) {
+			// The Agent tool returns the new subagent's id (at once for a background
+			// one): that ties its description to it exactly.
+			ev.LaunchDesc, ev.LaunchType = launchOf(p.ToolInput)
+			ev.LaunchedID = launchedID(p.ToolResponse)
+		}
 	case "PostToolUseFailure":
 		ev.Reason = clip(p.ToolName)
 		ev.DurationMs = int64(p.DurationMs)
 		ev.Failed = true
 		ev.Resolves = waitKey(p.AgentID, p.ToolName)
+		ev.SubagentID, ev.Subagent, ev.SubagentSeen = p.AgentID, clip(p.AgentType), p.AgentID != ""
 		if p.IsInterrupt {
 			ev.ErrorKind = "interrupt"
 			ev.Detail = clip("przerwane: " + p.ToolName)
@@ -268,6 +293,55 @@ func userQuestion(tool string, raw json.RawMessage) (q string, deferred bool) {
 	return "", false
 }
 
+// injectedTags open text Claude Code hands to a session as a user prompt although
+// nobody typed it: subagent reports, background-task and other notifications.
+var injectedTags = []string{"<agent-message", "<task-notification", "<system-reminder", "<side-sessions-event",
+	"<ci-monitor-event", "<teammate-message", "<local-command"}
+
+func injected(prompt string) bool {
+	p := strings.TrimSpace(prompt)
+	for _, t := range injectedTags {
+		if strings.HasPrefix(p, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// isAgentTool: the tool that starts a subagent ("Task" in older Claude Code).
+func isAgentTool(name string) bool { return name == "Agent" || name == "Task" }
+
+// launchOf reads what a subagent was started for and as which agent.
+func launchOf(raw json.RawMessage) (desc, typ string) {
+	var in struct {
+		Description  string `json:"description"`
+		SubagentType string `json:"subagent_type"`
+	}
+	_ = json.Unmarshal(raw, &in)
+	return clip(in.Description), clip(in.SubagentType)
+}
+
+var agentIDText = regexp.MustCompile(`agent[_ ]?[iI][dD]\W{1,3}([A-Za-z0-9_-]{6,})`)
+
+// launchedID finds the started subagent's id in the Agent tool's result: a JSON
+// field (agentId / agent_id) or, in the text Claude reads, "agentId: …".
+func launchedID(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var o struct {
+		AgentID  string `json:"agentId"`
+		AgentID2 string `json:"agent_id"`
+	}
+	if json.Unmarshal(raw, &o) == nil && firstNonEmpty(o.AgentID, o.AgentID2) != "" {
+		return firstNonEmpty(o.AgentID, o.AgentID2)
+	}
+	if m := agentIDText.FindSubmatch(raw); m != nil {
+		return string(m[1])
+	}
+	return ""
+}
+
 // waitKey names the tool call a session waits on: which agent (empty for the
 // main thread, else the subagent's id) and which tool. The tool's completion
 // with the same key ends the wait, while a background subagent's tools don't.
@@ -368,7 +442,11 @@ func (s *openCodeStatus) UnmarshalJSON(b []byte) error {
 // the plugin forwards.
 type openCodeData struct {
 	SessionID string `json:"sessionID"`
-	Location  struct {
+	// ParentID is set on session.created of a child session, which the
+	// subagent tool creates; the plugin repeats it on the child's later events.
+	ParentID string `json:"parentID"`
+	Agent    string `json:"agent"` // session.created: the agent the session runs as
+	Location struct {
 		Directory string `json:"directory"`
 	} `json:"location"`
 	Title  string         `json:"title"`
@@ -427,12 +505,22 @@ func ParseOpenCode(fallbackHost string, body []byte, at time.Time) (Event, error
 		Kind:      p.Type,
 		At:        at,
 		Model:     clip(d.Model.name()),
+		ParentID:  d.ParentID,
+	}
+	if ev.ParentID == ev.SessionID {
+		ev.ParentID = ""
 	}
 
 	switch p.Type {
 	case "session.created":
 		ev.State = StateIdle
 		ev.Task = clip(d.Title)
+		if ev.ParentID != "" {
+			// The subagent tool's child session: the title is the task's
+			// short description, agent the subagent type.
+			ev.Subagent = clip(d.Agent)
+			ev.Detail = clip(strings.TrimSpace("podagent " + d.Agent))
+		}
 	case "session.renamed":
 		ev.Task = clip(d.Title)
 	case "session.deleted":

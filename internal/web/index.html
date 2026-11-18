@@ -28,18 +28,49 @@
     margin: 0; padding: 16px; background: var(--bg); color: var(--text);
     font: 14px/1.45 var(--sans); font-variant-numeric: tabular-nums;
   }
-  header { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; margin-bottom: 14px; }
+  .title { display: flex; align-items: baseline; gap: 14px; min-width: 0; }
   h1 { font-size: 20px; margin: 0; font-weight: 700; }
-  .bar { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; justify-content: flex-end; }
+  .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   .group { display: inline-flex; border: 1px solid var(--line); }
-  .group button {
-    font: inherit; font-size: 13px; padding: 4px 10px; min-height: 32px; border: 0; cursor: pointer;
-    background: var(--panel); color: var(--muted);
+  .group > button, .group > .btn, .more > button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    font: inherit; font-size: 13px; padding: 4px 10px; min-height: 34px; min-width: 38px; border: 0; cursor: pointer;
+    background: var(--panel); color: var(--muted); text-decoration: none;
   }
-  .group button + button { border-left: 1px solid var(--line); }
-  .group button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
-  .group button:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
-  .group button.locked { color: var(--warn); }
+  .group > * + * { border-left: 1px solid var(--line); }
+  .group > button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+  .group > button:focus-visible, .group > .btn:focus-visible, .more > button:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+  .group > button.locked { color: var(--warn); }
+  .ico { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  /* Words next to the layout icons only where there is room for them. */
+  .lbl { display: none; }
+  @media (min-width: 1000px) { .lbl { display: inline; } }
+
+  /* "More": rarely used switches, with words, so the bar can stay icons only. */
+  .more { position: relative; display: inline-flex; }
+  .more > button[aria-expanded="true"] { background: var(--text); color: var(--bg); }
+  .menu {
+    position: absolute; right: -1px; top: calc(100% + 6px); z-index: 20; min-width: 240px;
+    display: grid; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 8px 24px rgb(0 0 0 / .25);
+  }
+  .menu[hidden] { display: none; }
+  .menu button {
+    display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 14px; min-height: 44px;
+    font: inherit; font-size: 14px; text-align: left; border: 0; background: none; color: var(--text); cursor: pointer;
+  }
+  .menu button + button { border-top: 1px solid var(--grid); }
+  .menu button[aria-pressed="true"]::after { content: "✓"; margin-left: auto; color: var(--ok); font-weight: 700; }
+  .menu button:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+  /* The time range moves into the menu on a phone (see the 560px query). */
+  .menu-range { display: none; align-items: center; gap: 4px; padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  .menu-range span { margin-right: auto; white-space: nowrap; }
+  .menu .menu-range button { width: auto; min-height: 40px; min-width: 44px; padding: 4px 8px; justify-content: center; border: 1px solid var(--line); }
+  .menu .menu-range button + button { border-top: 1px solid var(--line); }
+  .menu .menu-range button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+  .menu .menu-range button[aria-pressed="true"]::after { content: none; }
+  .menu-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .menu-legend i { display: inline-block; width: 14px; height: 8px; margin-right: 6px; }
   button, .head { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 
   /* Seen from the corner of your eye: a frame around the whole screen and a big line on top
@@ -47,6 +78,10 @@
   body::before { content: ""; position: fixed; inset: 0; z-index: 10; pointer-events: none; border: 0 solid transparent; }
   body.alarm-waiting::before { border: 8px solid var(--signal); }
   body.alarm-check::before { border: 8px solid var(--warn); }
+  /* Waiting for more than 5 minutes: the frame breathes, so it gets noticed even after you got used to it. */
+  body.alarm-waiting.alarm-long::before { border-width: 12px; animation: breathe 2s ease-in-out infinite; }
+  @keyframes breathe { 50% { border-color: color-mix(in srgb, var(--signal) 35%, transparent); } }
+  @media (prefers-reduced-motion: reduce) { body.alarm-waiting.alarm-long::before { animation: none; } }
   .beacon {
     display: block; width: 100%; margin: 0 0 16px; padding: 12px 16px; border: 0; cursor: pointer; text-align: left;
     font: 700 22px/1.25 var(--sans); background: var(--signal); color: var(--on-signal);
@@ -58,8 +93,6 @@
   .summary { color: var(--muted); font-size: 13px; }
   .summary b { color: var(--text); }
   .summary b.signal { color: var(--signal); }
-  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: -4px 0 14px; }
-  .legend i { display: inline-block; width: 14px; height: 8px; margin-right: 6px; }
 
   .hosts { display: grid; gap: 16px; }
   section { border: 1px solid var(--line); background: var(--panel); }
@@ -82,7 +115,18 @@
   .ticks span.first { transform: none; }
   .ticks span.last { transform: translateX(-100%); color: var(--text); }
 
+  .older {
+    display: block; width: 100%; padding: 10px 14px; min-height: 40px;
+    font: inherit; font-size: 13px; text-align: left; border: 0; border-top: 1px solid var(--grid);
+    background: var(--bg); color: var(--muted); cursor: pointer;
+  }
+  .older small { font-size: 12px; margin-left: 10px; }
+  .older:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
   .row { border-bottom: 1px solid var(--grid); }
+  /* A subagent's session under its parent: indented, with a hook that ties it up. */
+  .row.child .who { padding-left: 18px; position: relative; }
+  .row.child .who::before { content: "↳"; position: absolute; left: 0; top: 0; color: var(--muted); }
+  .row.child .who b { font-weight: 500; }
   .row:last-child { border-bottom: 0; }
   .head { padding: 10px 14px; cursor: pointer; }
   .head:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
@@ -119,11 +163,25 @@
   .machines .off-name { color: var(--warn); }
   .host-state { font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 10px; font-size: 12px; }
   .cap .chip { display: inline-block; margin-right: 8px; padding: 0 5px; border: 1px solid var(--line); font-size: 12px; color: var(--muted); background: var(--panel); }
+  .cap .chip.warm { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
+  .cap .chip.hot { color: var(--signal); border-color: var(--signal); font-weight: 600; }
+  .cap .chip.sub { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+  /* Running subagents, one line each: type · task · current tool call, and how long it runs. */
+  .subs { list-style: none; margin: 2px 0 0; padding: 0 0 0 10px; border-left: 2px solid color-mix(in srgb, var(--ok) 45%, transparent); display: grid; gap: 1px; }
+  .subs li { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 12px; line-height: 1.5; }
+  .subs .what { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subs .type { color: var(--ok); margin-right: 6px; }
+  .subs b { font-weight: 600; margin-right: 8px; }
+  .subs .doing { font-family: var(--mono); color: var(--muted); }
+  .subs small { flex: none; font: 11px var(--mono); color: var(--muted); }
+  .subs li.quiet .type { color: var(--muted); }
+  .subs li.quiet small::after { content: " · cisza"; color: var(--warn); }
+  /* Narrow: the current tool call gets a line of its own instead of being cut to "Bash:…". */
+  @media (max-width: 700px) {
+    .subs .doing { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+  }
   .state small[data-pre] { font-weight: 600; }
   .state.waiting small { color: var(--signal); }
-  h1 a { color: inherit; text-decoration: none; }
-  .nav { font: 400 14px var(--sans); color: var(--muted); margin-left: 12px; }
-  .nav:hover { color: var(--text); }
   .row.waiting .cap { white-space: normal; overflow-wrap: anywhere; }
   .row.waiting .cap .detail { display: block; margin: 2px 0 0; font: 600 14px/1.35 var(--sans); color: var(--signal); }
   .row.open .cap { white-space: normal; overflow-wrap: anywhere; }
@@ -172,13 +230,26 @@
   }
   /* Finger-sized targets on a touch screen. */
   @media (pointer: coarse) {
-    .group button, .actions button { min-height: 44px; padding: 8px 14px; font-size: 15px; }
+    .group > button, .group > .btn, .more > button { min-height: 44px; min-width: 44px; padding: 8px 10px; font-size: 15px; }
+    .actions button { min-height: 44px; padding: 8px 14px; font-size: 15px; }
     section h2 .rename { padding: 10px 8px; margin: -10px 0 -10px 4px; font-size: 13px; }
     .head { padding: 14px; }
     .summary { font-size: 15px; }
   }
 
+  /* Phone: the bar takes the whole width under the title, the three groups spread across it. */
+  @media (max-width: 560px) {
+    body { padding: 12px; }
+    header { gap: 8px; }
+    .title { width: 100%; justify-content: space-between; }
+    .bar { width: 100%; justify-content: space-between; gap: 6px; }
+    .group > button, .group > .btn, .more > button { padding: 4px 8px; min-width: 44px; }
+    .bar .range { display: none; }
+    .menu-range { display: flex; }
+    .beacon { font-size: 18px; padding: 10px 12px; }
+  }
   @media (max-width: 700px) {
+    .ticks span:not(.first):not(.last):not(.mid) { display: none; }
     .lanes { grid-template-columns: minmax(0, 1fr); }
     .lanes > .ticks { grid-row: 2; }
     .lanes > :last-child { display: none; }
@@ -191,45 +262,102 @@
 </head>
 <body>
 <header>
-  <h1>Agenci <a class="nav" href="/stats">statystyki →</a></h1>
+  <div class="title">
+    <h1>Agenci</h1>
+    <div class="summary" id="summary"></div>
+  </div>
   <div class="bar">
     <div class="group" role="group" aria-label="Układ listy">
-      <button type="button" data-group="host" title="Sesje pogrupowane według maszyny">maszyna</button>
-      <button type="button" data-group="project" title="Sesje pogrupowane według projektu">projekt</button>
-      <button type="button" data-group="queue" title="Najpierw sesje, które czekają na Ciebie">kolejka</button>
+      <button type="button" data-group="host" data-icon="host" title="Według maszyny"><span class="lbl">maszyna</span></button>
+      <button type="button" data-group="project" data-icon="project" title="Według projektu"><span class="lbl">projekt</span></button>
+      <button type="button" data-group="queue" data-icon="queue" title="Kolejka: najpierw to, co czeka na Ciebie"><span class="lbl">kolejka</span></button>
     </div>
-    <div class="group" role="group" aria-label="Zakres osi czasu">
-      <button type="button" data-range="15m">15 min</button>
-      <button type="button" data-range="1h">1 h</button>
-      <button type="button" data-range="4h">4 h</button>
-      <button type="button" data-range="12h">12 h</button>
+    <div class="group range" role="group" aria-label="Zakres osi czasu">
+      <button type="button" data-range="15m" title="Ostatnie 15 minut">15m</button>
+      <button type="button" data-range="1h" title="Ostatnia godzina">1h</button>
+      <button type="button" data-range="4h" title="Ostatnie 4 godziny">4h</button>
+      <button type="button" data-range="12h" title="Ostatnie 12 godzin">12h</button>
     </div>
-    <div class="group" role="group" aria-label="Zakończone sesje">
-      <button type="button" id="show-ended" title="Pokaż albo ukryj zakończone sesje">zakończone</button>
-      <button type="button" id="clear-ended" title="Usuń wszystkie zakończone sesje z listy">usuń zakończone</button>
+    <div class="group" role="group" aria-label="Narzędzia">
+      <button type="button" id="sound" data-icon="sound-off" aria-pressed="false"></button>
+      <a class="btn" href="/stats" data-icon="chart" title="Statystyki" aria-label="Statystyki"></a>
+      <div class="more">
+        <button type="button" id="more" data-icon="more" title="Więcej" aria-label="Więcej" aria-expanded="false" aria-controls="menu"></button>
+        <div class="menu" id="menu" role="menu" hidden>
+          <div class="menu-range" role="group" aria-label="Zakres osi czasu">
+            <span>oś czasu</span>
+            <button type="button" data-range="15m">15m</button>
+            <button type="button" data-range="1h">1h</button>
+            <button type="button" data-range="4h">4h</button>
+            <button type="button" data-range="12h">12h</button>
+          </div>
+          <button type="button" role="menuitemcheckbox" id="show-ended" data-icon="eye"><span>pokaż zakończone</span></button>
+          <button type="button" role="menuitem" id="clear-ended" data-icon="trash"><span>usuń zakończone z listy</span></button>
+          <button type="button" role="menuitemcheckbox" id="notify" data-icon="bell" aria-pressed="false"><span>powiadomienia</span></button>
+          <button type="button" role="menuitemcheckbox" id="awake" data-icon="sun" aria-pressed="false"><span>nie wygaszaj ekranu</span></button>
+          <button type="button" role="menuitemcheckbox" id="fullscreen" data-icon="expand" aria-pressed="false"><span>pełny ekran</span></button>
+          <div class="menu-legend" aria-hidden="true">
+            <span><i class="s-waiting"></i>czeka na Ciebie</span>
+            <span><i class="s-working"></i>pracuje</span>
+            <span><i class="s-error"></i>błąd</span>
+            <span><i class="s-stale"></i>brak sygnału</span>
+            <span><i class="s-idle"></i>gotowy</span>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="group" role="group" aria-label="Sygnały i ekran">
-      <button type="button" id="notify" aria-pressed="false">powiadomienia</button>
-      <button type="button" id="sound" aria-pressed="false">dźwięk</button>
-      <button type="button" id="awake" aria-pressed="false">nie wygaszaj</button>
-      <button type="button" id="fullscreen" aria-pressed="false">pełny ekran</button>
-    </div>
-    <div class="summary" id="summary"></div>
   </div>
 </header>
 <button type="button" id="beacon" class="beacon" hidden></button>
 <div id="machines" class="machines" hidden></div>
-<div class="legend" aria-hidden="true">
-  <span><i class="s-waiting"></i>czeka na Ciebie</span>
-  <span><i class="s-working"></i>pracuje</span>
-  <span><i class="s-error"></i>błąd</span>
-  <span><i class="s-stale"></i>brak sygnału</span>
-  <span><i class="s-idle"></i>gotowy</span>
-</div>
 <div id="offline" class="offline" hidden>Brak połączenia z serwerem</div>
 <div id="late" class="offline" hidden></div>
 <div id="hosts" class="hosts"></div>
 <script>
+// Line icons drawn in a 24×24 box with the current text colour.
+const ICONS = {
+  host: '<rect x="3" y="4" width="18" height="12" rx="1"/><path d="M8 20h8M12 16v4"/>',
+  project: '<path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>',
+  queue: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.5" fill="currentColor"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+  sound: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>',
+  "sound-off": '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9l5 6M22 9l-5 6"/>',
+  chart: '<path d="M4 20V10M10 20V4M16 20v-7M21 20H3"/>',
+  more: '<circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+};
+function icon(name) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("class", "ico");
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = ICONS[name] || "";
+  return svg;
+}
+// Puts (or swaps) the icon in front of an element's content.
+function setIcon(e, name) {
+  e.dataset.icon = name;
+  const old = e.querySelector(":scope > svg.ico");
+  if (old) old.replaceWith(icon(name)); else e.prepend(icon(name));
+}
+for (const e of document.querySelectorAll("[data-icon]")) setIcon(e, e.dataset.icon);
+
+// The "more" menu: opens under its button, closes on a choice elsewhere or Escape.
+const moreBtn = document.getElementById("more"), menu = document.getElementById("menu");
+function openMenu(open) {
+  menu.hidden = !open;
+  moreBtn.setAttribute("aria-expanded", String(open));
+}
+moreBtn.addEventListener("click", () => openMenu(menu.hidden));
+document.addEventListener("click", e => { if (!menu.hidden && !e.target.closest(".more")) openMenu(false); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !menu.hidden) { openMenu(false); moreBtn.focus(); } });
+// Actions that leave the page state obvious close the menu; switches keep it open.
+for (const id of ["clear-ended", "fullscreen"]) document.getElementById(id).addEventListener("click", () => openMenu(false));
+
 const LABEL = { waiting: "czeka na Ciebie", working: "pracuje", error: "błąd", idle: "gotowy", ended: "zakończona", stale: "brak sygnału" };
 const SHORT = { waiting: "czeka", working: "pracuje", error: "błąd", idle: "gotowy", ended: "zakończona", stale: "brak sygnału" };
 const AGENT = { claude: "Claude Code", opencode: "OpenCode" };
@@ -337,6 +465,12 @@ function details(s, now) {
   if (s.compactions) counts.push(s.compactions + " " + plural(s.compactions, "kompaktowanie", "kompaktowania", "kompaktowań"));
   item("Aktywność", counts.join(" · "));
   if (s.todosTotal) item("Zadania", (s.todosDone || 0) + " z " + s.todosTotal + " zrobione");
+  if (s.contextPct != null) {
+    item("Kontekst", Math.round(s.contextPct) + "%" +
+      (s.contextTokens ? " (" + Math.round(s.contextTokens / 1000) + "k z " + Math.round((s.contextLimit || 0) / 1000) + "k tokenów)" : ""));
+  }
+  if (s.costUsd) item("Koszt", "$" + s.costUsd.toFixed(2));
+  if (s.linesAdded || s.linesRemoved) item("Zmiany w kodzie", "+" + (s.linesAdded || 0) + " / −" + (s.linesRemoved || 0) + " linii");
   if (s.subagents && s.subagents.length) {
     item("Podagenci teraz", s.subagents.map(a => (a.type || "podagent") + " (od " + ago(a.since, now) + ")").join(", "));
   }
@@ -442,7 +576,8 @@ function ticks() {
   box.setAttribute("aria-hidden", "true");
   for (let t = ms; t >= 0; t -= step) {
     const label = t === 0 ? "teraz" : "−" + (t >= HOUR ? t / HOUR + " h" : t / MIN + " min");
-    const sp = el("span", t === ms ? "first" : t === 0 ? "last" : null, label);
+    // On a narrow screen only the ends and the middle keep their labels.
+    const sp = el("span", t === ms ? "first" : t === 0 ? "last" : t * 2 === ms ? "mid" : null, label);
     sp.style.left = (100 * (ms - t) / ms) + "%";
     box.append(sp);
   }
@@ -493,10 +628,11 @@ document.getElementById("clear-ended").addEventListener("click", () => {
   }
 });
 
-function row(s, now) {
+// nested: drawn right under its parent session (an OpenCode subagent).
+function row(s, now, nested) {
   const isOpen = expanded.has(s.key);
   const cls = s.stale ? "stale" : s.state;
-  const r = el("div", "row " + cls + (isOpen ? " open" : ""));
+  const r = el("div", "row " + cls + (isOpen ? " open" : "") + (nested ? " child" : ""));
   const head = el("div", "head");
   head.tabIndex = 0;
   head.setAttribute("role", "button");
@@ -507,22 +643,32 @@ function row(s, now) {
   const agent = AGENT[s.agent] || s.agent;
   const name = s.project || s.sessionId.slice(0, 8);
   const host = hostLabel(s.host);
-  const [title, sub] = groupBy === "project" ? [host, agent]
+  let [title, sub] = groupBy === "project" ? [host, agent]
     : groupBy === "queue" ? [name, host + " · " + agent]
     : [name, agent];
+  if (s.parentKey) {
+    // A subagent's session: named by what it does, and whose it is when not nested.
+    const parent = lastData && lastData.sessions.find(p => p.key === s.parentKey);
+    title = (s.subagentType ? s.subagentType + ": " : "") + (s.task || name);
+    sub = nested ? "podagent · " + agent
+      : "podagent sesji " + (parent ? parent.project || parent.sessionId.slice(0, 8) : "?") + " · " + host;
+  }
   const who = el("div", "who");
   who.append(el("b", null, title), el("span", null, sub));
 
   const trk = el("div", "trk");
   trk.append(strip(s, now));
   const chips = rowChips(s, now);
-  if (s.task || s.detail || chips.length) {
+  const task = s.parentKey ? "" : s.task;   // a subagent's task is already its title
+  if (task || s.detail || chips.length) {
     const cap = el("div", "cap");
     cap.append(...chips);
-    if (s.task) cap.append(el("span", "task", s.task));
+    if (task) cap.append(el("span", "task", task));
     if (s.detail) cap.append(el("span", "detail", s.detail));
     trk.append(cap);
   }
+  const lines = s.state === "ended" ? null : subLines(s, now);
+  if (lines) trk.append(lines);
 
   const st = el("div", "state " + cls, SHORT[cls] || cls);
   st.title = LABEL[cls] || cls;
@@ -559,12 +705,41 @@ function rowChips(s, now) {
   const out = [];
   const subs = s.subagents || [];
   if (subs.length) {
-    const c = el("span", "chip", subs.length + " " + plural(subs.length, "podagent", "podagenty", "podagentów"));
-    c.title = subs.map(a => (a.type || "podagent") + " · od " + ago(a.since, now)).join("\n");
-    out.push(c);
+    // Each one has its own line under the row (subLines); the chip only counts them.
+    out.push(el("span", "chip sub", subs.length + " " + plural(subs.length, "podagent", "podagenty", "podagentów")));
   }
   if (s.todosTotal) out.push(el("span", "chip", "zadania " + (s.todosDone || 0) + "/" + s.todosTotal));
+  // Context window use (from the statusline script): worth a look before auto-compaction.
+  if (s.contextPct != null && s.state !== "ended") {
+    const pct = Math.round(s.contextPct);
+    const c = el("span", "chip" + (pct >= 85 ? " hot" : pct >= 70 ? " warm" : ""), "kontekst " + pct + "%");
+    c.title = s.contextTokens ? Math.round(s.contextTokens / 1000) + "k z " + Math.round((s.contextLimit || 0) / 1000) + "k tokenów" : "";
+    out.push(c);
+  }
   return out;
+}
+
+// One line per running subagent: its type, the task it was started for, what it is doing
+// now and for how long it has run. OpenCode subagents have rows of their own instead.
+function subLines(s, now) {
+  const own = new Set((lastData ? lastData.sessions : []).map(x => x.key));
+  const subs = (s.subagents || []).filter(a => !own.has(s.agent + "/" + s.host + "/" + a.id));
+  if (!subs.length) return null;
+  const box = el("ul", "subs");
+  for (const a of [...subs].sort((x, y) => x.since.localeCompare(y.since) || x.id.localeCompare(y.id))) {
+    const li = el("li");
+    const what = el("span", "what");
+    what.append(el("span", "type", a.type || "podagent"));
+    what.append(el("b", null, a.desc || "—"));
+    if (a.doing) what.append(el("span", "doing", a.doing));
+    li.append(what, ageEl("small", a.since, now));
+    const quiet = now - Date.parse(a.lastSeen || a.since);
+    li.title = (a.calls ? a.calls + " " + plural(a.calls, "narzędzie", "narzędzia", "narzędzi") + " · " : "") +
+      "ostatnio " + ago(a.lastSeen || a.since, now) + " temu";
+    if (quiet > 3 * MIN) li.className = "quiet";   // no tool call for a while: thinking or stuck
+    box.append(li);
+  }
+  return box;
 }
 
 // host: set when the section is one machine, so its name can be changed from the header.
@@ -591,10 +766,49 @@ function section(name, count, list, now, cls, host, longestFirst) {
   const order = longestFirst
     ? (a, b) => since(a).localeCompare(since(b)) || a.key.localeCompare(b.key)
     : (a, b) => b.startedAt.localeCompare(a.startedAt) || a.key.localeCompare(b.key);
-  for (const s of [...list].sort(order)) {
-    sec.append(row(s, now));
+  // Done or ended for over an hour: folded into one line at the bottom, so a small screen
+  // shows what is going on now. An open session stays out, it was opened for a reason.
+  const sorted = [...list].sort(order);
+  // A subagent's own session (OpenCode) goes right under its parent when the parent is
+  // in this section; otherwise it stands alone and says whose it is.
+  const keys = new Set(sorted.map(s => s.key));
+  const kids = new Map();
+  for (const s of sorted) {
+    if (s.parentKey && keys.has(s.parentKey)) {
+      if (!kids.has(s.parentKey)) kids.set(s.parentKey, []);
+      kids.get(s.parentKey).push(s);
+    }
+  }
+  const top = sorted.filter(s => !(s.parentKey && keys.has(s.parentKey)));
+  const withKids = s => [row(s, now), ...(kids.get(s.key) || []).map(c => row(c, now, true))];
+  const old = top.filter(s => isOld(s, now) && !expanded.has(s.key));
+  const fold = old.length >= 2 ? old : [];
+  for (const s of top) if (!fold.includes(s)) sec.append(...withKids(s));
+  if (fold.length) {
+    const id = (cls || "") + "|" + (host ?? name);
+    const open = openOld.has(id);
+    const b = el("button", "older", (open ? "▾ " : "▸ ") + "starsze: " + fold.length);
+    b.type = "button";
+    b.dataset.older = id;
+    b.setAttribute("aria-expanded", String(open));
+    b.append(el("small", null, "gotowe lub zakończone, bez zmian od ponad godziny"));
+    sec.append(b);
+    if (open) for (const s of fold) sec.append(...withKids(s));
   }
   return sec;
+}
+
+const OLD_MS = 60 * MIN;
+const isOld = (s, now) => (s.state === "idle" || s.state === "ended") && now - Date.parse(since(s)) > OLD_MS;
+
+// Sections whose old sessions are unfolded, kept for this tab like the open details.
+const openOld = new Set();
+try { for (const k of JSON.parse(sessionStorage.getItem("openOld") || "[]")) openOld.add(k); } catch {}
+function toggleOld(id) {
+  if (openOld.has(id)) openOld.delete(id); else openOld.add(id);
+  try { sessionStorage.setItem("openOld", JSON.stringify([...openOld])); } catch {}
+  lastSig = "";
+  paint();
 }
 
 // Machines that send a heartbeat (installer adds it), keyed by the name agents report.
@@ -780,6 +994,11 @@ hostsRoot.addEventListener("click", e => {
     removeSessions("key=" + encodeURIComponent(rm.dataset.remove));
     return;
   }
+  const older = e.target.closest("[data-older]");
+  if (older) {
+    toggleOld(older.dataset.older);
+    return;
+  }
   const ren = e.target.closest("[data-rename]");
   if (ren) {
     renameHost(ren.dataset.rename);
@@ -880,10 +1099,12 @@ function chime(states) {
 const soundBtn = document.getElementById("sound");
 function showSound() {
   const locked = soundOn && (!audio || audio.state !== "running");
-  soundBtn.setAttribute("aria-pressed", String(soundOn));
+  // On and playing: pressed. On but held back by the browser: orange, not pressed, until a tap.
+  soundBtn.setAttribute("aria-pressed", String(soundOn && !locked));
   soundBtn.classList.toggle("locked", locked);
-  soundBtn.textContent = locked ? "dźwięk: dotknij" : "dźwięk";
-  soundBtn.title = locked ? "Przeglądarka wstrzymała dźwięk do pierwszego dotknięcia strony"
+  setIcon(soundBtn, soundOn ? "sound" : "sound-off");
+  soundBtn.setAttribute("aria-label", "Dźwięk");
+  soundBtn.title = locked ? "Dźwięk wstrzymany przez przeglądarkę: dotknij strony, aby go włączyć"
     : soundOn ? "Sygnał dźwiękowy, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę. Kliknij, aby wyłączyć"
     : "Włącz sygnał dźwiękowy, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę";
 }
@@ -1007,7 +1228,28 @@ try {
   beat.onmessage = () => { if (document.hidden && (notifyOn || soundOn)) tick(); };
 } catch {}
 
-setInterval(paint, 1000);
+// A wait that drags on: past REMIND_MS the frame pulses, and while the sound is on the
+// chime repeats every REMIND_MS for each session still waiting.
+const REMIND_MS = 5 * MIN;
+const reminded = new Map();   // session key -> when the wait was last chimed for
+function remind() {
+  if (!lastData) return;
+  const now = new Date(lastData.now).getTime() + (Date.now() - lastFetch);
+  const waiting = lastData.sessions.filter(s => s.state === "waiting");
+  let long = false, due = false;
+  for (const s of waiting) {
+    const since_ = Date.parse(since(s));
+    if (now - since_ < REMIND_MS) continue;
+    long = true;
+    const last = Math.max(reminded.get(s.key) || 0, since_);
+    if (now - last >= REMIND_MS) { reminded.set(s.key, now); due = true; }
+  }
+  for (const k of reminded.keys()) if (!waiting.some(s => s.key === k)) reminded.delete(k);
+  document.body.classList.toggle("alarm-long", long);
+  if (due && soundOn) chime(["waiting"]);
+}
+
+setInterval(() => { paint(); remind(); }, 1000);
 setGroup(groupBy);
 setRange(range);
 setShowEnded(showEnded);
