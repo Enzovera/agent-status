@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agenci</title>
+<script>
+  // Set before the first paint, so the page never flashes in the other theme.
+  try { document.documentElement.dataset.theme = localStorage.getItem("theme") === "light" ? "light" : "dark"; }
+  catch { document.documentElement.dataset.theme = "dark"; }
+</script>
 <style>
   /* Swimlanes: each session is a row with its recent states drawn on a strip; "now" is the right edge.
      Grouped by machine, by project, or as a queue ordered by what the session needs from you. */
@@ -15,13 +20,12 @@
     --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
     color-scheme: light;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #131513; --panel: #1a1c1a; --line: #2e322e; --grid: #242724; --text: #e8eae6; --muted: #959b93;
-      --signal: #ff7552; --signal-soft: #33201b; --ok: #5dbb83; --warn: #e3a63c; --warn-soft: #2c2414;
-      --idle: #454a44; --ended: #2a2d2a; --on-signal: #131513;
-      color-scheme: dark;
-    }
+  /* Dark unless switched to light (the theme button); not taken from the system. */
+  :root[data-theme="dark"] {
+    --bg: #131513; --panel: #1a1c1a; --line: #2e322e; --grid: #242724; --text: #e8eae6; --muted: #959b93;
+    --signal: #ff7552; --signal-soft: #33201b; --ok: #5dbb83; --warn: #e3a63c; --warn-soft: #2c2414;
+    --idle: #454a44; --ended: #2a2d2a; --on-signal: #131513;
+    color-scheme: dark;
   }
   * { box-sizing: border-box; border-radius: 0; }
   body {
@@ -280,6 +284,7 @@
       <button type="button" data-range="12h" title="Ostatnie 12 godzin">12h</button>
     </div>
     <div class="group" role="group" aria-label="Narzędzia">
+      <button type="button" id="theme" data-icon="theme"></button>
       <button type="button" id="sound" data-icon="sound-off" aria-pressed="false"></button>
       <a class="btn" href="/stats" data-icon="chart" title="Statystyki" aria-label="Statystyki"></a>
       <div class="more">
@@ -329,6 +334,7 @@ const ICONS = {
   bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  theme: '<circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/>',
 };
 function icon(name) {
   const ns = "http://www.w3.org/2000/svg";
@@ -346,6 +352,21 @@ function setIcon(e, name) {
   if (old) old.replaceWith(icon(name)); else e.prepend(icon(name));
 }
 for (const e of document.querySelectorAll("[data-icon]")) setIcon(e, e.dataset.icon);
+
+// Dark or light, chosen here and remembered on this device (the stats page reads the same).
+const themeBtn = document.getElementById("theme");
+function showTheme() {
+  const dark = document.documentElement.dataset.theme !== "light";
+  themeBtn.title = dark ? "Ciemny motyw. Kliknij, aby przełączyć na jasny" : "Jasny motyw. Kliknij, aby przełączyć na ciemny";
+  themeBtn.setAttribute("aria-label", dark ? "Przełącz na jasny motyw" : "Przełącz na ciemny motyw");
+}
+themeBtn.addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("theme", next); } catch {}
+  showTheme();
+});
+showTheme();
 
 // The "more" menu: opens under its button, closes on a choice elsewhere or Escape.
 const moreBtn = document.getElementById("more"), menu = document.getElementById("menu");
