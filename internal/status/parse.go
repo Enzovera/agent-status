@@ -128,13 +128,6 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		if p.AgentID == "" && isAgentTool(p.ToolName) {
 			ev.LaunchDesc, ev.LaunchType = launchOf(p.ToolInput)
 		}
-		if p.AgentID != "" {
-			// A subagent's tool call: it shows the subagent is running even
-			// where the SubagentStart/SubagentStop hooks are not installed.
-			ev.SubagentID, ev.Subagent, ev.SubagentSeen = p.AgentID, clip(p.AgentType), true
-			ev.SubagentDoing = ev.Detail
-			ev.Detail = clip(firstNonEmpty(p.AgentType, "podagent") + " › " + ev.Detail)
-		}
 		if q, ask := userQuestion(p.ToolName, p.ToolInput); q != "" {
 			if ask {
 				// Asked in the closing box: the turn goes on until Stop.
@@ -153,7 +146,6 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		ev.Reason = clip(p.ToolName)
 		ev.DurationMs = int64(p.DurationMs)
 		ev.Resolves = waitKey(p.AgentID, p.ToolName)
-		ev.SubagentID, ev.Subagent, ev.SubagentSeen = p.AgentID, clip(p.AgentType), p.AgentID != ""
 		if p.AgentID == "" && isAgentTool(p.ToolName) {
 			// The Agent tool returns the new subagent's id (at once for a background
 			// one): that ties its description to it exactly.
@@ -165,7 +157,6 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		ev.DurationMs = int64(p.DurationMs)
 		ev.Failed = true
 		ev.Resolves = waitKey(p.AgentID, p.ToolName)
-		ev.SubagentID, ev.Subagent, ev.SubagentSeen = p.AgentID, clip(p.AgentType), p.AgentID != ""
 		if p.IsInterrupt {
 			ev.ErrorKind = "interrupt"
 			ev.Detail = clip("przerwane: " + p.ToolName)
@@ -259,7 +250,34 @@ func ParseClaude(host string, body []byte, at time.Time) (Event, error) {
 		ev.State = StateEnded
 		ev.Reason = p.Reason
 	}
+	if p.AgentID != "" {
+		ev = asSubagentSession(ev, p)
+	}
 	return ev, nil
+}
+
+// asSubagentSession moves an event fired inside a subagent to the subagent's own
+// session (id = agent_id, parent = the main session), the way OpenCode reports its
+// subagents. The main session then shows only its main thread: a subagent's tool
+// calls, permission prompts and questions no longer change its state or caption.
+func asSubagentSession(ev Event, p claudePayload) Event {
+	ev.ParentID, ev.SessionID = ev.SessionID, p.AgentID
+	ev.Subagent = clip(p.AgentType)
+	// The parent lists its children itself (Store.trackChild), from these sessions.
+	ev.SubagentID, ev.SubagentStarted, ev.SubagentSeen, ev.SubagentStopped, ev.SubagentDoing = "", false, false, false, ""
+	ev.Task = "" // the session title belongs to the main session
+	ev.Ask = ""  // the closing-box question is the main thread's
+	ev.EndsTurn = false
+	switch p.HookEventName {
+	case "SubagentStart":
+		ev.State = StateWorking
+		ev.Detail = "start"
+	case "SubagentStop":
+		ev.State = StateEnded
+		ev.Message = clipLong(p.LastAssistantMessage)
+		ev.Detail = clip(firstNonEmpty(p.LastAssistantMessage, "skończył"))
+	}
+	return ev
 }
 
 // userQuestion recognizes Claude Code tools that stop and wait for the user.

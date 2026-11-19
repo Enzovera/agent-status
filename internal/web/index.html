@@ -121,6 +121,7 @@
     background: var(--bg); color: var(--muted); cursor: pointer;
   }
   .older small { font-size: 12px; margin-left: 10px; }
+  .older.kids { padding-left: 32px; background: none; border-top: 0; min-height: 32px; padding-top: 4px; padding-bottom: 6px; }
   .older:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
   .row { border-bottom: 1px solid var(--grid); }
   /* A subagent's session under its parent: indented, with a hook that ties it up. */
@@ -649,9 +650,11 @@ function row(s, now, nested) {
   if (s.parentKey) {
     // A subagent's session: named by what it does, and whose it is when not nested.
     const parent = lastData && lastData.sessions.find(p => p.key === s.parentKey);
-    title = (s.subagentType ? s.subagentType + ": " : "") + (s.task || name);
-    sub = nested ? "podagent · " + agent
-      : "podagent sesji " + (parent ? parent.project || parent.sessionId.slice(0, 8) : "?") + " · " + host;
+    // The task is the title; the agent type goes underneath, so a narrow screen keeps the task.
+    title = s.task || s.subagentType || name;
+    const kind = s.subagentType ? "podagent " + s.subagentType : "podagent";
+    sub = nested ? kind
+      : kind + " sesji " + (parent ? parent.project || parent.sessionId.slice(0, 8) : "?") + " · " + host;
   }
   const who = el("div", "who");
   who.append(el("b", null, title), el("span", null, sub));
@@ -780,7 +783,25 @@ function section(name, count, list, now, cls, host, longestFirst) {
     }
   }
   const top = sorted.filter(s => !(s.parentKey && keys.has(s.parentKey)));
-  const withKids = s => [row(s, now), ...(kids.get(s.key) || []).map(c => row(c, now, true))];
+  // Subagents that are done fold into one line after a minute; open ones stay out.
+  const done = c => (c.state === "ended" || c.state === "idle") && !expanded.has(c.key) && now - Date.parse(since(c)) > MIN;
+  const withKids = s => {
+    const all = kids.get(s.key) || [];
+    const gone = all.filter(done);
+    const out = [row(s, now), ...all.filter(c => !gone.includes(c)).map(c => row(c, now, true))];
+    if (gone.length) {
+      const id = "kids|" + s.key;
+      const open = openOld.has(id);
+      const b = el("button", "older kids", (open ? "▾ " : "▸ ") + "✓ " + gone.length + " " +
+        plural(gone.length, "podagent skończył", "podagenty skończyły", "podagentów skończyło"));
+      b.type = "button";
+      b.dataset.older = id;
+      b.setAttribute("aria-expanded", String(open));
+      out.push(b);
+      if (open) out.push(...gone.map(c => row(c, now, true)));
+    }
+    return out;
+  };
   const old = top.filter(s => isOld(s, now) && !expanded.has(s.key));
   const fold = old.length >= 2 ? old : [];
   for (const s of top) if (!fold.includes(s)) sec.append(...withKids(s));
@@ -851,8 +872,16 @@ function render(data) {
     hosts.append(el("div", "empty", "Brak sesji"));
   }
   if (groupBy === "queue") {
+    // A subagent sits in its parent's lane, under it, unless it needs you itself.
+    const byKey = new Map(data.sessions.map(s => [s.key, s]));
+    const laneOf = s => {
+      const p = s.parentKey && byKey.get(s.parentKey);
+      const own = LANES.find(l => l.has(s));
+      if (!p || own.id === "waiting" || own.id === "check") return own;
+      return LANES.find(l => l.has(p));
+    };
     for (const lane of LANES) {
-      const list = data.sessions.filter(lane.has);
+      const list = data.sessions.filter(s => laneOf(s) === lane);
       if (list.length) hosts.append(section(lane.title, String(list.length), list, now, "q-" + lane.id, null, lane.id === "waiting"));
     }
   } else {
@@ -902,7 +931,7 @@ function alarm(sessions) {
     head.append(" · ", ageEl("span", oldest, now, "najdłużej od "));
   }
   const names = [...list].sort((a, c) => since(a).localeCompare(since(c)))
-    .map(s => (s.project || s.sessionId.slice(0, 8)) + " (" + hostLabel(s.host) + ")");
+    .map(s => (s.parentKey ? (s.subagentType || "podagent") + " w " : "") + (s.project || s.sessionId.slice(0, 8)) + " (" + hostLabel(s.host) + ")");
   b.replaceChildren(head, el("small", null, names.join(" · ")));
   b.title = "Pokaż kolejkę";
 }

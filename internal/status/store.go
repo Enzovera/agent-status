@@ -325,6 +325,11 @@ func (s *Store) Apply(ev Event) (rec Record, ok bool) {
 	defer s.mu.Unlock()
 
 	sess, known := s.sessions[key]
+	if !known && ev.State == StateEnded && ev.ParentID != "" {
+		// The end of something never seen (Claude Code's internal agents stop
+		// without starting): nothing to show.
+		return Record{}, false
+	}
 	if !known {
 		sess = &Session{
 			Key:       key,
@@ -335,6 +340,10 @@ func (s *Store) Apply(ev Event) (rec Record, ok bool) {
 			StartedAt: ev.At,
 		}
 		s.sessions[key] = sess
+		// A Claude Code subagent: its title is the task the main thread started it for.
+		if parent := s.sessions[ev.Agent+"/"+ev.Host+"/"+ev.ParentID]; ev.ParentID != "" && parent != nil {
+			sess.Task = parent.takeLaunch(ev.SessionID, ev.Subagent)
+		}
 	}
 	prev := sess.State
 	defer func() { rec = record(ev, sess, prev) }()
@@ -357,6 +366,12 @@ func (s *Store) Apply(ev Event) (rec Record, ok bool) {
 		sess.PendingAsk = ""
 	}
 	if ev.KeepWaiting && sess.State == StateWaiting {
+		ev.State = ""
+		ev.Detail = ""
+	}
+	// The generic "Claude needs your permission" notification may come without the
+	// subagent's id; when a subagent of this session already waits, it is about that.
+	if ev.KeepWaiting && ev.State == StateWaiting && s.childWaiting(key) {
 		ev.State = ""
 		ev.Detail = ""
 	}
@@ -416,6 +431,7 @@ func (s *Store) Apply(ev Event) (rec Record, ok bool) {
 		sess.Compactions++
 	}
 	sess.trackSubagent(ev)
+	s.labelChild(sess, ev)
 	sess.trackTodo(ev)
 	s.trackChild(sess, ev)
 	sess.addHistory(ev)
@@ -431,6 +447,7 @@ func (s *Store) Apply(ev Event) (rec Record, ok bool) {
 func record(ev Event, sess *Session, prev State) Record {
 	return Record{
 		At: ev.At, Key: sess.Key, Agent: sess.Agent, Host: sess.Host, SessionID: sess.SessionID,
+		Parent:  sess.ParentKey,
 		Project: sess.Project, Cwd: sess.Cwd, Kind: ev.Kind,
 		State: sess.State, Prev: prev, Title: sess.Task, Detail: ev.Detail, Tool: ev.Tool,
 		Prompt: clip(ev.Prompt), Model: sess.Model, Mode: sess.Mode, Permission: ev.Permission,
@@ -445,6 +462,41 @@ func record(ev Event, sess *Session, prev State) Record {
 // counted once, when the link is first seen. The child keeps its own row,
 // so a child waiting for you still shows as waiting. ev is the event as
 // Apply resolved it.
+// childWaiting reports whether a subagent session of key waits for the user.
+func (s *Store) childWaiting(key string) bool {
+	for _, c := range s.sessions {
+		if c.ParentKey == key && c.State == StateWaiting {
+			return true
+		}
+	}
+	return false
+}
+
+// labelChild: the Agent tool returned the id of the subagent it started, so that
+// subagent's session gets this task as its title. One that got it by guess (the
+// launch order) swaps titles with it.
+func (s *Store) labelChild(parent *Session, ev Event) {
+	if ev.LaunchedID == "" || ev.LaunchDesc == "" {
+		return
+	}
+	child := s.sessions[parent.Agent+"/"+parent.Host+"/"+ev.LaunchedID]
+	if child == nil || child.Task == ev.LaunchDesc {
+		return
+	}
+	old := child.Task
+	child.Task = ev.LaunchDesc
+	for _, c := range s.sessions {
+		if c != child && c.ParentKey == parent.Key && c.Task == ev.LaunchDesc {
+			c.Task = old
+			return
+		}
+	}
+	parent.dropLaunch(ev.LaunchDesc)
+	if old != "" {
+		parent.Launches = append(parent.Launches, Launch{Desc: old, Type: child.SubagentType, At: ev.At})
+	}
+}
+
 func (s *Store) trackChild(child *Session, ev Event) {
 	created := false
 	if ev.ParentID != "" && child.ParentKey == "" {

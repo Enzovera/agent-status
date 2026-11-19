@@ -39,8 +39,6 @@ func TestParseClaude(t *testing.T) {
 		{"tool failure", `{"session_id":"s1","hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_input":{"command":"npm test"},"tool_use_id":"toolu_1","error":"Exit code 1\nError: Cannot find module 'express'","is_interrupt":false,"duration_ms":4187}`, "", "", "błąd narzędzia: Bash: Exit code 1 Error: Cannot find module 'express'"},
 		{"tool interrupted", `{"session_id":"s1","hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"aborted","is_interrupt":true}`, "", "", "przerwane: Bash"},
 		{"permission denied", `{"session_id":"s1","permission_mode":"auto","hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/build","description":"Clean build directory"},"tool_use_id":"toolu_1","reason":"[Irreversible Local Destruction]"}`, "", "", "odmowa: Bash: Clean build directory"},
-		{"subagent start", `{"session_id":"s1","hook_event_name":"SubagentStart","agent_id":"agent-abc123","agent_type":"Explore"}`, "", "", "podagent: Explore"},
-		{"subagent stop", `{"session_id":"s1","hook_event_name":"SubagentStop","stop_hook_active":false,"agent_id":"def456","agent_type":"Explore","last_assistant_message":"Analysis complete.","background_tasks":[],"session_crons":[]}`, "", "", ""},
 		{"task created", `{"session_id":"s1","hook_event_name":"TaskCreated","task_id":"task-001","task_subject":"Implement user authentication","task_description":"Add login"}`, "", "", ""},
 		{"task completed", `{"session_id":"s1","hook_event_name":"TaskCompleted","task_id":"task-001","task_subject":"Implement user authentication"}`, "", "", "zrobione: Implement user authentication"},
 		{"pre compact manual", `{"session_id":"s1","hook_event_name":"PreCompact","trigger":"manual","custom_instructions":null}`, "", "", "kompaktuje kontekst"},
@@ -85,10 +83,6 @@ func TestParseClaudeNewHooks(t *testing.T) {
 			Event{Reason: "Bash", DurationMs: 5, Failed: true, Resolves: "|Bash", ErrorKind: "interrupt", Detail: "przerwane: Bash"}},
 		{"permission denied", `{"session_id":"s1","hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"curl x"},"reason":"[Data Exfiltration]","permission_mode":"auto"}`,
 			Event{Reason: "[Data Exfiltration]", Detail: "odmowa: Bash: curl x", Mode: "auto"}},
-		{"subagent start", `{"session_id":"s1","hook_event_name":"SubagentStart","agent_id":"agent-abc123","agent_type":"Explore"}`,
-			Event{Subagent: "Explore", SubagentID: "agent-abc123", AgentID: "agent-abc123", SubagentStarted: true, Detail: "podagent: Explore"}},
-		{"subagent stop", `{"session_id":"s1","hook_event_name":"SubagentStop","agent_id":"agent-abc123","agent_type":"Explore","last_assistant_message":"done"}`,
-			Event{Subagent: "Explore", SubagentID: "agent-abc123", AgentID: "agent-abc123", SubagentStopped: true}},
 		{"task created", `{"session_id":"s1","hook_event_name":"TaskCreated","task_id":"task-001","task_subject":"Auth"}`,
 			Event{TodoID: "task-001", Todo: "Auth"}},
 		{"task completed", `{"session_id":"s1","hook_event_name":"TaskCompleted","task_id":"task-001","task_subject":"Auth"}`,
@@ -265,5 +259,34 @@ func TestParseOpenCodeChild(t *testing.T) {
 	ev, _ = ParseOpenCode("h", []byte(`{"type":"session.idle","data":{"sessionID":"c","parentID":"c"}}`), at)
 	if ev.ParentID != "" {
 		t.Errorf("self parent kept: %+v", ev)
+	}
+}
+
+// Everything fired inside a Claude Code subagent belongs to the subagent's own
+// session (id = agent_id, parent = the main session), like OpenCode's subagents.
+func TestParseClaudeSubagentSession(t *testing.T) {
+	at := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name, body string
+		state      State
+		detail     string
+	}{
+		{"start", `{"session_id":"s1","hook_event_name":"SubagentStart","agent_id":"ag1","agent_type":"Explore"}`, StateWorking, "start"},
+		{"tool", `{"session_id":"s1","hook_event_name":"PreToolUse","agent_id":"ag1","agent_type":"Explore","tool_name":"Grep","tool_input":{"pattern":"x"}}`, StateWorking, "Grep: x"},
+		{"permission", `{"session_id":"s1","hook_event_name":"PermissionRequest","agent_id":"ag1","agent_type":"Explore","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}`, StateWaiting, "zgoda: Bash: rm -rf build"},
+		{"stop", `{"session_id":"s1","hook_event_name":"SubagentStop","agent_id":"ag1","agent_type":"Explore","last_assistant_message":"Found 3 uses."}`, StateEnded, "Found 3 uses."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ev, err := ParseClaude("pc1", []byte(tt.body), at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ev.SessionID != "ag1" || ev.ParentID != "s1" || ev.Subagent != "Explore" || ev.State != tt.state || ev.Detail != tt.detail {
+				t.Errorf("got %+v", ev)
+			}
+			if ev.SubagentStarted || ev.SubagentSeen || ev.SubagentStopped || ev.SubagentID != "" {
+				t.Errorf("parent-side flags set: %+v", ev)
+			}
+		})
 	}
 }

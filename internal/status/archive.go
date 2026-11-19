@@ -23,9 +23,11 @@ type Record struct {
 	Agent     string    `json:"agent"`
 	Host      string    `json:"host"`
 	SessionID string    `json:"session"`
-	Project   string    `json:"project,omitempty"`
-	Cwd       string    `json:"cwd,omitempty"`
-	Kind      string    `json:"kind"`
+	// Parent is the key of the session that started this one (a subagent's session).
+	Parent  string `json:"parent,omitempty"`
+	Project string `json:"project,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
+	Kind    string `json:"kind"`
 	// State is the session's state after the event; Prev is the state before it
 	// (equal to State when the event changed nothing).
 	State  State  `json:"state"`

@@ -138,6 +138,8 @@ OpenCode 1.x ma inny format pluginów i ten plugin tam nie zadziała.
 
 Claude Code nie zgłasza samej zgody ani odpowiedzi na pytanie, więc sesja czekająca na zgodę albo odpowiedź wraca do „pracuje”, gdy to samo narzędzie się skończy (`PostToolUse`/`PostToolUseFailure`) — albo wcześniej, przy kolejnym narzędziu. Narzędzia podagentów działających w tle tego nie robią.
 
+Podagenci Claude Code (narzędzie `Agent`) mają własne wiersze pod sesją główną, tak jak podagenci OpenCode: wszystko, co hook zgłasza z `agent_id`, trafia do sesji podagenta (`agent_id` jako id, sesja główna jako rodzic). Tytułem wiersza jest zadanie, z jakim go uruchomiono. Sesja główna pokazuje tylko swój główny wątek: narzędzia, prośby o zgodę i koniec pracy podagenta nie zmieniają jej stanu ani opisu. Podagent czekający na zgodę trafia w kolejce do „Czeka na Ciebie”. Zakończeni podagenci po minucie zwijają się do linii „✓ N podagentów skończyło”. W statystykach czas i oczekiwania podagentów się liczą, ale nie są liczeni jako osobne sesje.
+
 Bez zmiany stanu w Claude Code, tylko opis i liczniki: `PostToolUse` (czas narzędzia, do statystyk), `PostToolUseFailure` (błąd narzędzia), `PermissionDenied` (odmowa w trybie auto), `SubagentStart`/`SubagentStop` (działające podagenty), `TaskCreated`/`TaskCompleted` (postęp listy zadań, np. „zadania 3/5”), `PreCompact`/`PostCompact` (kompaktowanie kontekstu), `PostModelSwitch` (model). Opis sesji czekającej na Ciebie nie jest przez nie nadpisywany.
 
 Bez zmiany stanu w OpenCode: `session.renamed` (tytuł), `session.model.selected` (model), `session.inbox.enqueued` (polecenie), `session.text.ended` (odpowiedź), `session.tool.failed` (opis). Gdy sesja przechodzi w „gotowy” bez własnego opisu, wiersz pokazuje początek ostatniej odpowiedzi.

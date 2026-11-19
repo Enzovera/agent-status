@@ -567,38 +567,6 @@ func TestPermissionWaitEndsWithItsTool(t *testing.T) {
 	}
 }
 
-// Without SubagentStart/SubagentStop hooks a subagent still shows up through
-// its tool calls, and drops off once it has been silent for subagentFor.
-func TestSubagentSeenFromToolCalls(t *testing.T) {
-	t0 := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
-	s, _ := NewStore("")
-	post := func(body string, at time.Time) {
-		ev, err := ParseClaude("pc", []byte(body), at)
-		if err != nil {
-			t.Fatal(err)
-		}
-		s.Apply(ev)
-	}
-	post(`{"session_id":"a","hook_event_name":"UserPromptSubmit","prompt":"x"}`, t0)
-	post(`{"session_id":"a","hook_event_name":"PreToolUse","tool_name":"Grep","agent_id":"ag1","agent_type":"Explore","tool_input":{"pattern":"foo"}}`, t0.Add(time.Second))
-	post(`{"session_id":"a","hook_event_name":"PreToolUse","tool_name":"Read","agent_id":"ag1","agent_type":"Explore","tool_input":{"file_path":"x.go"}}`, t0.Add(10*time.Minute))
-
-	got := s.List(t0.Add(11 * time.Minute))[0]
-	if len(got.Subagents) != 1 || got.Subagents[0].Type != "Explore" || got.SubagentRuns != 1 {
-		t.Fatalf("subagents = %+v, runs = %d", got.Subagents, got.SubagentRuns)
-	}
-	if got.Detail != "Explore › Read: x.go" {
-		t.Errorf("detail = %q", got.Detail)
-	}
-	// Still listed 15 min after its last tool call, gone after subagentFor.
-	if l := s.List(t0.Add(25 * time.Minute))[0].Subagents; len(l) != 1 {
-		t.Errorf("dropped too early: %+v", l)
-	}
-	if l := s.List(t0.Add(10*time.Minute + subagentFor + time.Second))[0].Subagents; len(l) != 0 {
-		t.Errorf("silent subagent still listed: %+v", l)
-	}
-}
-
 func TestRecordWorth(t *testing.T) {
 	if (Record{Kind: "session.reasoning.delta", State: StateWorking, Prev: StateWorking}).Worth() {
 		t.Error("a no-op event should not be archived")
@@ -721,45 +689,94 @@ func TestClaudeHasNoParentKey(t *testing.T) {
 	}
 }
 
-// Each subagent gets the task it was started for and shows its latest tool call.
-// Several launched at once take descriptions in launch order until the Agent
-// tool's result names the exact id.
-func TestSubagentDescriptions(t *testing.T) {
-	t0 := time.Date(2026, 11, 18, 23, 24, 0, 0, time.UTC)
-	s, _ := NewStore("")
-	post := func(body string, sec int) {
+func claudePost(t *testing.T, s *Store, t0 time.Time) func(body string, sec int) {
+	return func(body string, sec int) {
+		t.Helper()
 		ev, err := ParseClaude("mac", []byte(body), t0.Add(time.Duration(sec)*time.Second))
 		if err != nil {
 			t.Fatal(err)
 		}
 		s.Apply(ev)
 	}
+}
+
+func sessionsByKey(l []Session) map[string]Session {
+	m := map[string]Session{}
+	for _, x := range l {
+		m[x.Key] = x
+	}
+	return m
+}
+
+// A Claude Code subagent is a session of its own under the main one: its tool
+// calls, permission prompts and end change only its own row, never the main
+// session's state or caption.
+func TestClaudeSubagentSessions(t *testing.T) {
+	t0 := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	post := claudePost(t, s, t0)
+	post(`{"session_id":"m","cwd":"/src/app","hook_event_name":"UserPromptSubmit","prompt":"przejrzyj kod"}`, 0)
+	post(`{"session_id":"m","hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"description":"Find API uses","subagent_type":"Explore"}}`, 1)
+	post(`{"session_id":"m","cwd":"/src/app","hook_event_name":"SubagentStart","agent_id":"ag1","agent_type":"Explore"}`, 2)
+	post(`{"session_id":"m","hook_event_name":"Stop","last_assistant_message":"Uruchomiłem podagenta."}`, 3)
+	post(`{"session_id":"m","cwd":"/src/app","hook_event_name":"PreToolUse","tool_name":"Grep","agent_id":"ag1","agent_type":"Explore","tool_input":{"pattern":"api"}}`, 4)
+	post(`{"session_id":"m","cwd":"/src/app","hook_event_name":"PermissionRequest","tool_name":"Bash","agent_id":"ag1","agent_type":"Explore","tool_input":{"command":"go test ./..."}}`, 5)
+	// The generic notification may lack the subagent's id: it must not make the main session wait.
+	post(`{"session_id":"m","hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission"}`, 6)
+
+	m := sessionsByKey(s.List(t0.Add(time.Minute)))
+	main, child := m["claude/mac/m"], m["claude/mac/ag1"]
+	if main.State != StateIdle || main.Detail != "Uruchomiłem podagenta." {
+		t.Errorf("main: %s %q", main.State, main.Detail)
+	}
+	if child.ParentKey != "claude/mac/m" || child.SubagentType != "Explore" || child.Task != "Find API uses" {
+		t.Errorf("child identity: parent %q type %q task %q", child.ParentKey, child.SubagentType, child.Task)
+	}
+	if child.State != StateWaiting || child.Detail != "zgoda: Bash: go test ./..." || child.ToolCalls != 1 {
+		t.Errorf("child: %s %q tools %d", child.State, child.Detail, child.ToolCalls)
+	}
+	if len(main.Subagents) != 1 || main.SubagentRuns != 1 || main.ToolCalls != 1 {
+		t.Errorf("main lists %+v, runs %d, tools %d", main.Subagents, main.SubagentRuns, main.ToolCalls)
+	}
+
+	// Approved: the tool finishes, the subagent works on, then stops.
+	post(`{"session_id":"m","hook_event_name":"PostToolUse","tool_name":"Bash","agent_id":"ag1","agent_type":"Explore","duration_ms":800}`, 20)
+	if c := sessionsByKey(s.List(t0.Add(time.Minute)))["claude/mac/ag1"]; c.State != StateWorking {
+		t.Errorf("after approval: %s", c.State)
+	}
+	post(`{"session_id":"m","hook_event_name":"SubagentStop","agent_id":"ag1","agent_type":"Explore","last_assistant_message":"3 uses"}`, 30)
+	// An internal agent that never started only stops: nothing appears.
+	post(`{"session_id":"m","hook_event_name":"SubagentStop","agent_id":"internal9","agent_type":""}`, 31)
+	m = sessionsByKey(s.List(t0.Add(time.Minute)))
+	if c := m["claude/mac/ag1"]; c.State != StateEnded || c.Detail != "3 uses" {
+		t.Errorf("stopped child: %s %q", c.State, c.Detail)
+	}
+	if _, ok := m["claude/mac/internal9"]; ok || len(m["claude/mac/m"].Subagents) != 0 {
+		t.Errorf("after stop: %d sessions, main lists %+v", len(m), m["claude/mac/m"].Subagents)
+	}
+}
+
+// Subagents started together take tasks in launch order until the Agent tool's
+// result names the exact id; then titles swap. A subagent's report handed back
+// as a prompt is not the user's prompt.
+func TestClaudeSubagentTitles(t *testing.T) {
+	t0 := time.Date(2026, 11, 18, 23, 24, 0, 0, time.UTC)
+	s, _ := NewStore("")
+	post := claudePost(t, s, t0)
 	post(`{"session_id":"m","hook_event_name":"UserPromptSubmit","prompt":"zrob review PR"}`, 0)
 	post(`{"session_id":"m","hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"description":"Review PR 84","subagent_type":"general-purpose"}}`, 1)
 	post(`{"session_id":"m","hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":{"description":"Review PR 85","subagent_type":"general-purpose"}}`, 1)
-	// Started in the opposite order; the guess (launch order) is wrong at first.
 	post(`{"session_id":"m","hook_event_name":"SubagentStart","agent_id":"bbbbbbbbbbbbbbbb2","agent_type":"general-purpose"}`, 2)
 	post(`{"session_id":"m","hook_event_name":"SubagentStart","agent_id":"aaaaaaaaaaaaaaaa1","agent_type":"general-purpose"}`, 2)
 	post(`{"session_id":"m","hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"description":"Review PR 84","subagent_type":"general-purpose"},"tool_response":"Async agent launched successfully.\nagentId: aaaaaaaaaaaaaaaa1 (internal ID)"}`, 3)
-	post(`{"session_id":"m","hook_event_name":"PreToolUse","tool_name":"Bash","agent_id":"bbbbbbbbbbbbbbbb2","agent_type":"general-purpose","tool_input":{"command":"gh pr view 85"}}`, 4)
-	// A subagent's report handed back as a prompt is not the user's prompt.
 	post(`{"session_id":"m","hook_event_name":"UserPromptSubmit","prompt":"<agent-message from=\"b\"> report"}`, 5)
 
-	sess := s.List(t0.Add(time.Minute))[0]
-	desc := map[string]Subagent{}
-	for _, a := range sess.Subagents {
-		desc[a.ID] = a
+	m := sessionsByKey(s.List(t0.Add(time.Minute)))
+	if a, b := m["claude/mac/aaaaaaaaaaaaaaaa1"].Task, m["claude/mac/bbbbbbbbbbbbbbbb2"].Task; a != "Review PR 84" || b != "Review PR 85" {
+		t.Errorf("titles: a %q, b %q", a, b)
 	}
-	if desc["aaaaaaaaaaaaaaaa1"].Desc != "Review PR 84" || desc["bbbbbbbbbbbbbbbb2"].Desc != "Review PR 85" {
-		t.Errorf("descriptions: %+v", sess.Subagents)
-	}
-	if desc["bbbbbbbbbbbbbbbb2"].Doing != "Bash: gh pr view 85" || desc["bbbbbbbbbbbbbbbb2"].Calls != 1 {
-		t.Errorf("activity of b: %+v", desc["bbbbbbbbbbbbbbbb2"])
-	}
-	if len(sess.Launches) != 0 {
-		t.Errorf("launches left: %+v", sess.Launches)
-	}
-	if sess.Task != "zrob review PR" || sess.Prompts != 1 {
-		t.Errorf("task %q prompts %d", sess.Task, sess.Prompts)
+	main := m["claude/mac/m"]
+	if len(main.Launches) != 0 || main.Task != "zrob review PR" || main.Prompts != 1 {
+		t.Errorf("main: launches %+v task %q prompts %d", main.Launches, main.Task, main.Prompts)
 	}
 }

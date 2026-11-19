@@ -482,11 +482,14 @@ func (g *Group) touch(key string) {
 // sess is the replay state of one session.
 type sess struct {
 	key, agent, host, project, model, title string
-	row                                     SessionRow
-	active                                  bool
-	runState                                status.State
-	runA, runB                              time.Time
-	compactPre, compactPost                 []compaction
+	// parent: the main session's key when this is a subagent's session; those are
+	// not counted as sessions of their own (their time and waits still count).
+	parent                  string
+	row                     SessionRow
+	active                  bool
+	runState                status.State
+	runA, runB              time.Time
+	compactPre, compactPost []compaction
 }
 
 type compaction struct {
@@ -496,6 +499,9 @@ type compaction struct {
 
 func (s *sess) meta(r status.Record) {
 	s.agent, s.host = r.Agent, r.Host
+	if r.Parent != "" {
+		s.parent = r.Parent
+	}
 	if r.Project != "" {
 		s.project = r.Project
 	}
@@ -726,7 +732,7 @@ func (c *calc) interval(s *sess, st status.State, a, b time.Time, next *status.R
 			case status.StateError:
 				g.errSec += sec
 			}
-			if activeState {
+			if activeState && s.parent == "" {
 				g.touch(s.key)
 			}
 		}
@@ -777,7 +783,9 @@ func (c *calc) record(s *sess, r status.Record) {
 	s.mark(r.At)
 	gs := c.groups(r.At, s)
 	for _, g := range gs {
-		g.touch(s.key)
+		if s.parent == "" {
+			g.touch(s.key)
+		}
 	}
 	add := func(f func(g *Group)) {
 		for _, g := range gs {
