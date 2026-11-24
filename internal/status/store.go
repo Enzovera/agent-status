@@ -414,7 +414,7 @@ func (s *Store) Apply(ev Event) (rec Record, ok bool) {
 	if ev.State == StateIdle && ev.Detail == "" && sess.LastMessage != "" {
 		sess.Detail = clip(sess.LastMessage)
 	}
-	if ev.Tool != "" {
+	if ev.Tool != "" && ev.Kind != "session.tool.failed" { // a failure names a call already counted
 		if sess.Tools == nil {
 			sess.Tools = map[string]int{}
 		}

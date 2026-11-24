@@ -23,6 +23,7 @@ func (c *calc) cost(s *sess, r status.Record) {
 	}
 	c.records++
 	c.kinds[r.Kind]++
+	s.hasCost = true
 	for _, g := range c.groups(r.At, s) {
 		g.cost += r.CostDelta
 	}
@@ -40,7 +41,8 @@ func costReport(p func(string, ...any), st *Stats) {
 	}
 	p("## Koszt (szacunek Claude Code)\n\n")
 	p("Koszt sesji Claude Code według ich własnego szacunku (`cost.total_cost_usd` ze statusLine, ceny katalogowe; może różnić się od rachunku). Liczony z przyrostów w okresie; sesje OpenCode i maszyny bez skryptu statusLine nie są wliczone.\n\n")
-	p("Razem: $%.2f.\n\n", st.Totals.CostUsd)
+	cv := st.Coverage
+	p("Razem: $%.2f – z %d z %d sesji Claude Code (pozostałe nie wysłały statusLine; ich koszt jest nieznany, nie zerowy).\n\n", st.Totals.CostUsd, cv.ClaudeWithCost, cv.ClaudeSessions)
 	list := func(title string, gs []Group) {
 		gs = append([]Group(nil), gs...)
 		sort.SliceStable(gs, func(i, j int) bool { return gs[i].CostUsd > gs[j].CostUsd })

@@ -33,10 +33,10 @@ Mało danych (np. < 2 dni, < 5 sesji, sekcja „Brak w danych”): powiedz to wp
 ## 2. Analiza (kolejność wg czasu do odzyskania)
 
 1. **Użytkownik jako wąskie gardło**: waitShare, czas reakcji według przyczyny (suma i p90 ważniejsze niż mediana), godziny/dni z najwyższym „≥1 czeka” i najdłuższą reakcją, „czas do kolejnego polecenia”. Przyczyny → działania: `permission` → allowlista / tryb; `question` i `decision` → pełniejsze polecenia na start, instrukcja w CLAUDE.md, żeby agent sam decydował w drobnych sprawach i kończył turę bez pytania; `plan` → plan mode tylko dla dużych zadań; długie przerwy po turze → kolejka zadań / mniej sesji naraz.
-2. **Zgody**: `permissions.byPattern` (liczba, suma czekania, projekty), `byMode`, `denied`. Reguły - punkt 3.
+2. **Zgody**: `permissions.byPattern` (liczba, suma czekania, projekty), `byMode`, `denied`. Reguły - punkt 3. Brak próśb przy sesjach w trybie `auto` („Tryby uprawnień sesji”) nie znaczy, że allowlista jest pełna - wtedy oceniaj tylko odmowy trybu auto (lista „co zostało odmówione”): słuszna blokada czy reguła do dodania.
 3. **Równoległość**: `avgWorking` gdy aktywne, maks., `multiWaitingEvents`, udział czasu z ≥1 czekającą. Dużo jednoczesnych czekań i rosnąca reakcja → za dużo sesji naraz; ~1 pracująca sesja i długie przerwy → miejsce na więcej równoległych zadań (worktree, podagenci, tło).
 4. **Błędy i tarcie**: błędy wg typu, kompaktowania wg projektu (duży kontekst → krótsze zadania, podagenci, odchudzony CLAUDE.md), narzędzia z wysokim % błędów (np. PowerShell/Bash na złej powłoce, flaky testy), przerwania, długie narzędzia.
-5. **Maszyny / projekty / modele**: gdzie waitShare i błędy odstają; czy drogi model nie robi prostych rzeczy (i odwrotnie).
+5. **Maszyny / projekty / modele**: gdzie waitShare i błędy odstają; czy drogi model nie robi prostych rzeczy (i odwrotnie). Sprawdź w „Zakres danych”, ile sesji Claude Code ma model i koszt - przy niskim pokryciu nie wyciągaj wniosków o modelach Claude ani o koszcie, tylko zaproponuj instalację statusLine na wymienionych maszynach.
 
 ## 3. Reguły uprawnień Claude Code (składnia z code.claude.com/docs/en/permissions)
 

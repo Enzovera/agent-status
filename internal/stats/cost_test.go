@@ -58,7 +58,7 @@ func TestCostFromStatusline(t *testing.T) {
 	if err := Report(&b, st); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(b.String(), "Razem: $2.50.") || !strings.Contains(b.String(), "p2 $2.00, p1 $0.50") {
+	if !strings.Contains(b.String(), "Razem: $2.50 – z 2 z 2 sesji Claude Code") || !strings.Contains(b.String(), "p2 $2.00, p1 $0.50") {
 		t.Errorf("report has no cost section:\n%s", b.String())
 	}
 	for _, s := range st.Sessions {

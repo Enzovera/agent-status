@@ -73,12 +73,15 @@ type Options struct {
 }
 
 type Stats struct {
-	Period        Period       `json:"period"`
-	Caps          Caps         `json:"caps"`
-	Coverage      Coverage     `json:"coverage"`
-	Totals        Group        `json:"totals"`
-	Latency       Latency      `json:"latency"`
-	NextPrompt    Dist         `json:"nextPrompt"`
+	Period     Period   `json:"period"`
+	Caps       Caps     `json:"caps"`
+	Coverage   Coverage `json:"coverage"`
+	Totals     Group    `json:"totals"`
+	Latency    Latency  `json:"latency"`
+	NextPrompt Dist     `json:"nextPrompt"`
+	// TurnLength: wall time of a turn of a main session, from the prompt to its end
+	// (waits for the user included).
+	TurnLength    Dist         `json:"turnLength"`
 	Parallelism   Parallelism  `json:"parallelism"`
 	ByHour        []TimeGroup  `json:"byHour"`
 	ByWeekday     []TimeGroup  `json:"byWeekday"`
@@ -95,6 +98,8 @@ type Stats struct {
 	Todos         Todos        `json:"todos"`
 	Interruptions []Count      `json:"interruptions"`
 	Sessions      []SessionRow `json:"sessions"`
+	// SessionModes counts main sessions by agent and the last permission mode seen.
+	SessionModes []Count `json:"sessionModes"`
 
 	loc *time.Location
 }
@@ -124,6 +129,18 @@ type Coverage struct {
 	// Missing names data the statistics could use but the archive has none of
 	// in this period (older clients or hooks not installed).
 	Missing []string `json:"missing,omitempty"`
+	// DaysWithData: local days with at least one record.
+	DaysWithData int `json:"daysWithData"`
+	// SubagentSessions: subagent sessions (not counted as sessions; their work is
+	// in subagentWorkingSec).
+	SubagentSessions int `json:"subagentSessions"`
+	// Claude Code main sessions, and how many of them have a model name and a
+	// cost (both come only from the statusLine script).
+	ClaudeSessions  int `json:"claudeSessions"`
+	ClaudeWithModel int `json:"claudeWithModel"`
+	ClaudeWithCost  int `json:"claudeWithCost"`
+	// NoStatusline: machines with Claude Code sessions but no statusline record.
+	NoStatusline []string `json:"noStatusline,omitempty"`
 }
 
 // Dist summarizes durations in seconds.
@@ -189,9 +206,13 @@ type Group struct {
 	// CostUsd is what Claude Code estimated the slice cost (statusline
 	// records, see cost.go); 0 without them.
 	CostUsd float64 `json:"costUsd"`
+	// SubagentWorkingSec: working time of subagent sessions. It runs inside
+	// their main session's turn, so it is not in WorkingSec.
+	SubagentWorkingSec int64 `json:"subagentWorkingSec"`
 
 	keys                     map[string]bool
 	work, wait, idle, errSec float64
+	subWork                  float64
 	cost                     float64
 	lat                      samples
 }
@@ -208,6 +229,7 @@ type TimeGroup struct {
 	MultiWaitingSec int64   `json:"multiWaitingSec"`
 
 	span, active, anyWork, anyWait, multiWait float64
+	workInt                                   float64 // ∫ working main sessions dt
 }
 
 type Count struct {
@@ -222,6 +244,8 @@ type Permissions struct {
 	ByMode    []Count       `json:"byMode"`
 	ByProject []Count       `json:"byProject"`
 	Denied    []Count       `json:"denied"` // PermissionDenied (auto mode refused), by reason
+	// DeniedDetails: the same refusals by what was refused ("odmowa: Bash: …").
+	DeniedDetails []Count `json:"deniedDetails"`
 }
 
 // PermPattern groups similar permission requests: an allowlist candidate.
@@ -238,8 +262,12 @@ type PermPattern struct {
 	lat            samples
 }
 
+// ToolStat is one tool of one agent: Claude Code and OpenCode name their tools
+// differently and report different things (OpenCode: no completions, so no
+// times; failures only from session.tool.failed).
 type ToolStat struct {
 	Tool        string  `json:"tool"`
+	Agent       string  `json:"agent"`
 	Calls       int     `json:"calls"`     // PreToolUse / session.tool.called
 	Completed   int     `json:"completed"` // PostToolUse + PostToolUseFailure
 	Failures    int     `json:"failures"`
@@ -270,6 +298,8 @@ type SessionRow struct {
 	Project        string    `json:"project"`
 	Model          string    `json:"model,omitempty"`
 	Title          string    `json:"title,omitempty"`
+	Parent         string    `json:"parent,omitempty"` // main session's key, for a subagent's session
+	Mode           string    `json:"mode,omitempty"`   // last permission mode seen
 	Start          time.Time `json:"start"`
 	End            time.Time `json:"end"`
 	LastState      string    `json:"lastState"`
@@ -347,6 +377,10 @@ type calc struct {
 	first, last             time.Time
 	permTool, permMode      map[string]int
 	permProject, denied     map[string]int
+	deniedDetail            map[string]int
+	turnLen                 samples
+	parents                 map[string]string // session key → main session's key
+	dataDays                map[string]bool   // local days with records
 	patterns                map[string]*PermPattern
 	tools                   map[string]*ToolStat
 	errors, compactTrig     map[string]int
@@ -355,11 +389,15 @@ type calc struct {
 	todosCreated, todosDone int
 	permTotal, compactTotal int
 	sessions                []*sess
+	costOnly                []*sess // sessions with a cost but no activity in the period
 	workRuns, waitRuns      []run
 	sawPost                 bool
 }
 
-type run struct{ a, b time.Time }
+type run struct {
+	a, b time.Time
+	key  string
+}
 
 func newCalc(opt Options) *calc {
 	if opt.Loc == nil {
@@ -378,6 +416,7 @@ func newCalc(opt Options) *calc {
 		dims:    map[string]map[string]*Group{"host": {}, "project": {}, "agent": {}, "model": {}},
 		byCause: map[string]samples{}, kinds: map[string]int{},
 		permTool: map[string]int{}, permMode: map[string]int{}, permProject: map[string]int{}, denied: map[string]int{},
+		deniedDetail: map[string]int{}, parents: map[string]string{}, dataDays: map[string]bool{},
 		patterns: map[string]*PermPattern{}, tools: map[string]*ToolStat{},
 		errors: map[string]int{}, compactTrig: map[string]int{}, compactProj: map[string]int{},
 		subagents: map[string]int{}, interrupts: map[string]int{},
@@ -485,6 +524,8 @@ type sess struct {
 	// parent: the main session's key when this is a subagent's session; those are
 	// not counted as sessions of their own (their time and waits still count).
 	parent                  string
+	mode, lastTool          string
+	hasCost                 bool
 	row                     SessionRow
 	active                  bool
 	runState                status.State
@@ -507,6 +548,9 @@ func (s *sess) meta(r status.Record) {
 	}
 	if r.Model != "" {
 		s.model = r.Model
+	}
+	if r.Mode != "" {
+		s.mode = r.Mode
 	}
 	if r.Title != "" {
 		s.title = r.Title
@@ -534,6 +578,9 @@ func (c *calc) replay(key string, recs []status.Record) {
 		waitRec  status.Record
 		idleAt   time.Time
 		idleOpen bool
+		turnAt   time.Time
+		turnOn   bool
+		turnBase float64 // the session's working + waiting seconds when the turn began
 		// After a tool completed while the store still said "waiting" (the
 		// user approved; Claude Code sends no event for that), further
 		// "waiting" records that only repeat the store's state are ignored.
@@ -606,13 +653,29 @@ func (c *calc) replay(key string, recs []status.Record) {
 			if next == status.StateWaiting {
 				waitOn, waitAt, waitRec = true, r.At, r
 			}
+			// A subagent's prompts and turns are its main session's work, not
+			// the user's: they count only on the subagent's own row.
+			main := s.parent == ""
 			turnEnd := old == status.StateWorking &&
 				(next == status.StateIdle || next == status.StateError || (next == status.StateWaiting && r.Kind == "Stop"))
 			if turnEnd && in {
-				for _, g := range c.groups(r.At, s) {
-					g.Turns++
+				if main {
+					for _, g := range c.groups(r.At, s) {
+						g.Turns++
+					}
+					if turnOn && !turnAt.Before(c.from) {
+						// Working + waiting during the turn, so a lost event's
+						// silence counts only up to its cap.
+						c.turnLen = append(c.turnLen, s.row.work+s.row.wait-turnBase)
+					}
 				}
 				s.row.Turns++
+			}
+			if turnEnd {
+				turnOn = false
+			}
+			if next == status.StateWorking && old != status.StateWorking && !turnOn {
+				turnAt, turnOn, turnBase = r.At, true, s.row.work+s.row.wait
 			}
 			if next == status.StateError && in {
 				c.errors[errorKey(r)]++
@@ -622,7 +685,7 @@ func (c *calc) replay(key string, recs []status.Record) {
 				s.row.Errors++
 			}
 			if next == status.StateWorking && old == status.StateIdle && idleOpen {
-				if gap := r.At.Sub(idleAt); gap < MaxNextPrompt && !idleAt.Before(c.from) {
+				if gap := r.At.Sub(idleAt); main && gap < MaxNextPrompt && !idleAt.Before(c.from) {
 					c.nextPrompt = append(c.nextPrompt, gap.Seconds())
 				}
 			}
@@ -641,12 +704,19 @@ func (c *calc) replay(key string, recs []status.Record) {
 	}
 	s.flushRun(c)
 	c.compactions(s)
+	if s.parent != "" {
+		c.parents[key] = s.parent
+	}
 	if s.active {
 		s.row.Key, s.row.Agent, s.row.Host, s.row.Project = s.key, s.agent, s.host, s.project
 		s.row.HostLabel = c.opt.HostNames[s.host]
 		s.row.Model, s.row.Title, s.row.LastState = s.model, s.title, string(cur)
+		s.row.Parent, s.row.Mode = s.parent, s.mode
 		s.row.CostUsd = roundCost(s.row.cost)
 		c.sessions = append(c.sessions, s)
+	} else if s.hasCost {
+		// Only statusline records in the period: no activity, but a cost.
+		c.costOnly = append(c.costOnly, s)
 	}
 }
 
@@ -722,6 +792,14 @@ func (c *calc) interval(s *sess, st status.State, a, b time.Time, next *status.R
 	c.eachHour(a, b, func(at time.Time, d time.Duration) {
 		sec := d.Seconds()
 		for _, g := range c.groups(at, s) {
+			if s.parent != "" {
+				// A subagent works inside its main session's turn: counting
+				// its time again would double it.
+				if st == status.StateWorking {
+					g.subWork += sec
+				}
+				continue
+			}
 			switch st {
 			case status.StateWorking:
 				g.work += sec
@@ -732,7 +810,7 @@ func (c *calc) interval(s *sess, st status.State, a, b time.Time, next *status.R
 			case status.StateError:
 				g.errSec += sec
 			}
-			if activeState && s.parent == "" {
+			if activeState {
 				g.touch(s.key)
 			}
 		}
@@ -763,9 +841,9 @@ func (c *calc) interval(s *sess, st status.State, a, b time.Time, next *status.R
 func (s *sess) flushRun(c *calc) {
 	switch s.runState {
 	case status.StateWorking:
-		c.workRuns = append(c.workRuns, run{s.runA, s.runB})
+		c.workRuns = append(c.workRuns, run{s.runA, s.runB, s.key})
 	case status.StateWaiting:
-		c.waitRuns = append(c.waitRuns, run{s.runA, s.runB})
+		c.waitRuns = append(c.waitRuns, run{s.runA, s.runB, s.key})
 	}
 	s.runState = ""
 }
@@ -780,6 +858,7 @@ func (c *calc) record(s *sess, r status.Record) {
 	if r.At.After(c.last) {
 		c.last = r.At
 	}
+	c.dataDays[r.At.In(c.loc).Format("2006-01-02")] = true
 	s.mark(r.At)
 	gs := c.groups(r.At, s)
 	for _, g := range gs {
@@ -793,13 +872,17 @@ func (c *calc) record(s *sess, r status.Record) {
 		}
 	}
 	if r.Prompt != "" || r.Kind == "UserPromptSubmit" {
-		add(func(g *Group) { g.Prompts++ })
+		// A subagent's "prompt" is the task its main session gave it.
+		if s.parent == "" {
+			add(func(g *Group) { g.Prompts++ })
+		}
 		s.row.Prompts++
 	}
-	if r.Tool != "" {
+	if r.Tool != "" && r.Kind != "session.tool.failed" {
 		add(func(g *Group) { g.ToolCalls++ })
 		s.row.ToolCalls++
-		c.tool(r.Tool).Calls++
+		c.tool(s.agent, r.Tool).Calls++
+		s.lastTool = r.Tool
 	}
 	if r.Permission {
 		add(func(g *Group) { g.Permissions++ })
@@ -807,7 +890,7 @@ func (c *calc) record(s *sess, r status.Record) {
 		c.permTotal++
 		tool, pat := permTarget(r.Detail)
 		c.permTool[tool]++
-		c.tool(tool).Permissions++
+		c.tool(s.agent, tool).Permissions++
 		c.permMode[orUnknown(r.Mode)]++
 		c.permProject[orNone(s.project)]++
 		p := c.patterns[pat]
@@ -822,7 +905,7 @@ func (c *calc) record(s *sess, r status.Record) {
 	switch r.Kind {
 	case "PostToolUse", "PostToolUseFailure":
 		c.sawPost = true
-		t := c.tool(firstNonEmpty(r.Reason, r.Tool, "(nieznane)"))
+		t := c.tool(s.agent, firstNonEmpty(r.Reason, r.Tool, "(nieznane)"))
 		t.Completed++
 		if r.Failed || r.Kind == "PostToolUseFailure" {
 			t.Failures++
@@ -833,9 +916,12 @@ func (c *calc) record(s *sess, r status.Record) {
 			t.MaxMs = max(t.MaxMs, r.DurationMs)
 		}
 	case "session.tool.failed":
-		c.tool(firstNonEmpty(r.Tool, "(nieznane)")).Failures++
+		// Older plugins sent no tool name here: the failure is most likely the
+		// session's last called tool.
+		c.tool(s.agent, firstNonEmpty(r.Tool, s.lastTool, "(nieznane)")).Failures++
 	case "PermissionDenied":
 		c.denied[firstNonEmpty(r.Reason, "(bez powodu)")]++
+		c.deniedDetail[firstNonEmpty(strings.TrimSpace(r.Detail), "(bez opisu)")]++
 	case "PreCompact", "session.compacted":
 		s.compactPre = append(s.compactPre, compaction{r.At, r.Reason})
 	case "PostCompact":
@@ -877,11 +963,12 @@ func (c *calc) compactions(s *sess) {
 	}
 }
 
-func (c *calc) tool(name string) *ToolStat {
-	t := c.tools[name]
+func (c *calc) tool(agent, name string) *ToolStat {
+	k := agent + "\x00" + name
+	t := c.tools[k]
 	if t == nil {
-		t = &ToolStat{Tool: name}
-		c.tools[name] = t
+		t = &ToolStat{Tool: name, Agent: agent}
+		c.tools[k] = t
 	}
 	return t
 }
@@ -902,17 +989,19 @@ func (c *calc) sweep(p *Parallelism) {
 		t      time.Time
 		dw, dq int
 	}
+	// A main session and its subagents count as one: it works while any of
+	// them works.
 	var evs []ev
-	for _, r := range c.workRuns {
+	for _, r := range c.perRoot(c.workRuns) {
 		evs = append(evs, ev{t: r.a, dw: 1}, ev{t: r.b, dw: -1})
 	}
-	for _, r := range c.waitRuns {
+	for _, r := range c.perRoot(c.waitRuns) {
 		evs = append(evs, ev{t: r.a, dq: 1}, ev{t: r.b, dq: -1})
 	}
 	sort.Slice(evs, func(i, j int) bool { return evs[i].t.Before(evs[j].t) })
 	var nw, nq int
 	var prev time.Time
-	var anyWork, anyWait, active, multi float64
+	var anyWork, anyWait, active, multi, workInt float64
 	for i := 0; i < len(evs); {
 		t := evs[i].t
 		if i > 0 && t.After(prev) && (nw > 0 || nq > 0) {
@@ -927,9 +1016,11 @@ func (c *calc) sweep(p *Parallelism) {
 				multi += d
 			}
 			active += d
+			workInt += float64(nw) * d
 			w, q := nw, nq
 			c.eachHour(prev, t, func(at time.Time, d time.Duration) {
 				for _, g := range c.timeGroups(at) {
+					g.workInt += float64(w) * d.Seconds()
 					if w > 0 {
 						g.anyWork += d.Seconds()
 					}
@@ -963,15 +1054,55 @@ func (c *calc) sweep(p *Parallelism) {
 	p.PeriodSec = secs(period)
 	p.ActiveSec, p.AnyWorkingSec, p.AnyWaitingSec, p.MultiWaitingSec = secs(active), secs(anyWork), secs(anyWait), secs(multi)
 	if period > 0 {
-		p.AvgWorking = ratio(c.totals.work, period)
+		p.AvgWorking = ratio(workInt, period)
 		p.AnyWaitingShare = ratio(anyWait, period)
 	}
 	if anyWork > 0 {
-		p.AvgWorkingWhenActive = ratio(c.totals.work, anyWork)
+		p.AvgWorkingWhenActive = ratio(workInt, anyWork)
 	}
 	if active > 0 {
 		p.AnyWaitingShareOfActive = ratio(anyWait, active)
 	}
+}
+
+// root follows a subagent session up to its main session.
+func (c *calc) root(k string) string {
+	for range 8 {
+		p := c.parents[k]
+		if p == "" || p == k {
+			break
+		}
+		k = p
+	}
+	return k
+}
+
+// perRoot merges the runs of each main session with its subagents' runs, so
+// overlapping ones count once.
+func (c *calc) perRoot(rs []run) []run {
+	by := map[string][]run{}
+	for _, r := range rs {
+		k := c.root(r.key)
+		by[k] = append(by[k], r)
+	}
+	var out []run
+	for k, l := range by {
+		sort.Slice(l, func(i, j int) bool { return l[i].a.Before(l[j].a) })
+		cur := l[0]
+		for _, r := range l[1:] {
+			if !r.a.After(cur.b) {
+				if r.b.After(cur.b) {
+					cur.b = r.b
+				}
+				continue
+			}
+			out = append(out, cur)
+			cur = r
+		}
+		cur.key = k
+		out = append(out, cur)
+	}
+	return out
 }
 
 func secs(f float64) int64 { return int64(math.Round(f)) }
@@ -989,12 +1120,13 @@ func (g *Group) finish() {
 	g.WaitShare = ratio(g.wait, g.work+g.wait)
 	g.Waits = g.lat.dist()
 	g.CostUsd = roundCost(g.cost)
+	g.SubagentWorkingSec = secs(g.subWork)
 }
 
 func (t *TimeGroup) finish() {
 	t.Group.finish()
 	t.SpanSec, t.ActiveSec, t.AnyWorkingSec, t.AnyWaitingSec, t.MultiWaitingSec = secs(t.span), secs(t.active), secs(t.anyWork), secs(t.anyWait), secs(t.multiWait)
-	t.AvgWorking = ratio(t.work, t.span)
+	t.AvgWorking = ratio(t.workInt, t.span)
 }
 
 func (c *calc) finish() *Stats {
@@ -1056,10 +1188,12 @@ func (c *calc) finish() *Stats {
 	st.Latency.All = all.dist()
 	st.Latency.Over4h, st.Latency.OpenAtEnd = c.over4h, c.openAtEnd
 	st.NextPrompt = c.nextPrompt.dist()
+	st.TurnLength = c.turnLen.dist()
 
 	st.Permissions = Permissions{
 		Total: c.permTotal, ByTool: counts(c.permTool), ByMode: counts(c.permMode),
-		ByProject: counts(c.permProject), Denied: counts(c.denied), ByPattern: []PermPattern{},
+		ByProject: counts(c.permProject), Denied: counts(c.denied), DeniedDetails: counts(c.deniedDetail),
+		ByPattern: []PermPattern{},
 	}
 	for _, p := range c.patterns {
 		p.Sessions, p.Projects, p.Waits = len(p.keys), len(p.projects), p.lat.dist()
@@ -1088,7 +1222,10 @@ func (c *calc) finish() *Stats {
 		if a.Calls != b.Calls {
 			return a.Calls > b.Calls
 		}
-		return a.Tool < b.Tool
+		if a.Tool != b.Tool {
+			return a.Tool < b.Tool
+		}
+		return a.Agent < b.Agent
 	})
 
 	st.Errors = counts(c.errors)
@@ -1116,12 +1253,48 @@ func (c *calc) finish() *Stats {
 		}
 	}
 
+	st.Coverage.DaysWithData = len(c.dataDays)
+	modes := map[string]int{}
+	claudeHosts, costHosts := map[string]bool{}, map[string]bool{}
 	st.Sessions = []SessionRow{}
 	for _, s := range c.sessions {
 		r := s.row
 		r.WorkingSec, r.WaitingSec, r.IdleSec = secs(r.work), secs(r.wait), secs(r.idle)
 		st.Sessions = append(st.Sessions, r)
+		if s.parent != "" {
+			st.Coverage.SubagentSessions++
+			continue
+		}
+		modes[s.agent+": "+orUnknown(s.mode)]++
+		if s.agent == "claude" {
+			st.Coverage.ClaudeSessions++
+			claudeHosts[s.host] = true
+			if s.model != "" {
+				st.Coverage.ClaudeWithModel++
+			}
+			if s.hasCost {
+				st.Coverage.ClaudeWithCost++
+				costHosts[s.host] = true
+			}
+		}
 	}
+	for _, s := range c.costOnly {
+		if s.parent == "" && s.agent == "claude" {
+			st.Coverage.ClaudeSessions++
+			st.Coverage.ClaudeWithCost++
+			if s.model != "" {
+				st.Coverage.ClaudeWithModel++
+			}
+			claudeHosts[s.host], costHosts[s.host] = true, true
+		}
+	}
+	st.SessionModes = counts(modes)
+	for h := range claudeHosts {
+		if !costHosts[h] {
+			st.Coverage.NoStatusline = append(st.Coverage.NoStatusline, h)
+		}
+	}
+	sort.Strings(st.Coverage.NoStatusline)
 	sort.Slice(st.Sessions, func(i, j int) bool { return st.Sessions[i].Start.Before(st.Sessions[j].Start) })
 	return st
 }

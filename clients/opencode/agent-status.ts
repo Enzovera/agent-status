@@ -42,8 +42,13 @@ export default Plugin.define({
   async setup(ctx) {
     const host = process.env.AGENT_STATUS_HOST ?? hostname()
     const controller = new AbortController()
-    // session.tool.called carries no tool name; remember it from input.started.
+    // session.tool.called and session.tool.failed carry no tool name; remember
+    // it from input.started. Bounded: a call that succeeds sends no event.
     const toolNames = new Map<string, string>()
+    const rememberTool = (id: string, name: string) => {
+      toolNames.set(id, name)
+      if (toolNames.size > 500) toolNames.delete(toolNames.keys().next().value!)
+    }
     // The subagent tool runs each subagent as a child session; only its
     // session.created names the parent, so repeat that on the child's events.
     const parents = new Map<string, string>()
@@ -72,11 +77,10 @@ export default Plugin.define({
 
         switch (e.type) {
           case "session.tool.input.started":
-            toolNames.set(data.id, data.name)
+            rememberTool(data.id, data.name)
             continue // the call itself is reported by session.tool.called
           case "session.tool.called": {
             data.name = toolNames.get(data.id) ?? data.name
-            toolNames.delete(data.id)
             const input: Record<string, unknown> = {}
             for (const k of TOOL_KEYS) if (data.input?.[k] != null) input[k] = cut(String(data.input[k]))
             data.input = input
@@ -84,6 +88,7 @@ export default Plugin.define({
             break
           }
           case "session.tool.failed":
+            data.name = toolNames.get(data.id) ?? data.name
             toolNames.delete(data.id)
             delete data.content
             delete data.metadata

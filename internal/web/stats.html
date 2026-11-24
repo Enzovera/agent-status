@@ -439,13 +439,13 @@ function render(st) {
     });
     if (rows.length) b.append(table([["wzorzec"], ["razy", 1], ["sesje", 1], ["projekty", 1], ["mediana reakcji", 1], ["suma czekania", 1]], rows));
     else b.append(el("div", "muted", "Brak próśb o zgodę."));
-    if (st.permissions.denied.length) b.append(el("p", "note", "Odmowy w trybie auto: " + st.permissions.denied.map(c => c.key + " " + c.count).join(", ")));
+    if (st.permissions.denied.length) b.append(el("p", "note", "Odmowy w trybie auto: " + (st.permissions.deniedDetails || st.permissions.denied).map(c => c.key + " ×" + c.count).join(", ")));
     out.push(s);
   }
 
   {
     const [s, b] = section("Narzędzia");
-    const rows = st.tools.slice(0, 20).map(x => [x.tool, num(x.calls), num(x.failures), x.failures ? pct(x.failureRate) : "–",
+    const rows = st.tools.slice(0, 20).map(x => [x.agent ? x.tool + " · " + x.agent : x.tool, num(x.calls), num(x.failures), x.failures ? pct(x.failureRate) : "–",
       x.timed ? dur(x.avgMs / 1000) : "–", x.timed ? dur(x.totalMs / 1000) : "–", num(x.permissions)]);
     if (rows.length) b.append(table([["narzędzie"], ["wywołania", 1], ["błędy", 1], ["% błędów", 1], ["śr. czas", 1], ["łącznie", 1], ["zgody", 1]], rows));
     else b.append(el("div", "muted", "Brak danych o narzędziach."));

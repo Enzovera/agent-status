@@ -263,3 +263,64 @@ func TestWaitingOvernightIsCapped(t *testing.T) {
 		t.Errorf("latency = %+v, longest %d", st.Latency, st.Sessions[0].LongestWaitSec)
 	}
 }
+
+func parent(k string) recOpt { return func(r *status.Record) { r.Parent = k } }
+func mode(md string) recOpt  { return func(r *status.Record) { r.Mode = md } }
+
+func TestSubagentsCountOnce(t *testing.T) {
+	sub := "claude/h1/sub"
+	recs := []status.Record{
+		rec(m(0), kA, "UserPromptSubmit", I, W, prompt(), mode("auto")),
+		// The subagent works 10–20 inside A's turn, and gets its task as a "prompt".
+		rec(m(10), sub, "UserPromptSubmit", I, W, prompt(), parent(kA)),
+		rec(m(15), sub, "PreToolUse", W, W, tool("Read"), parent(kA)),
+		rec(m(20), sub, "Stop", W, I, parent(kA)),
+		rec(m(30), kA, "Stop", W, I),
+		rec(m(31), kA, "PermissionDenied", I, I, detail("odmowa: Bash: rm -rf build"), func(r *status.Record) { r.Reason = "[Destructive]" }),
+	}
+	st := compute(t, recs)
+	tot := st.Totals
+	if tot.WorkingSec != 30*60 || tot.SubagentWorkingSec != 10*60 {
+		t.Errorf("working = %d, subagent = %d; want 1800, 600", tot.WorkingSec, tot.SubagentWorkingSec)
+	}
+	if tot.Sessions != 1 || tot.Prompts != 1 || tot.Turns != 1 || st.Coverage.SubagentSessions != 1 {
+		t.Errorf("sessions %d prompts %d turns %d subagents %d; want 1 1 1 1", tot.Sessions, tot.Prompts, tot.Turns, st.Coverage.SubagentSessions)
+	}
+	if p := st.Parallelism; p.MaxWorking != 1 || p.AvgWorkingWhenActive != 1 {
+		t.Errorf("parallelism = %+v; the subagent runs inside its main session", p)
+	}
+	if st.TurnLength.Count != 1 || st.TurnLength.MedianSec != 30*60 {
+		t.Errorf("turn length = %+v", st.TurnLength)
+	}
+	if len(st.SessionModes) != 1 || st.SessionModes[0].Key != "claude: auto" {
+		t.Errorf("session modes = %+v", st.SessionModes)
+	}
+	if d := st.Permissions.DeniedDetails; len(d) != 1 || d[0].Key != "odmowa: Bash: rm -rf build" {
+		t.Errorf("denied details = %+v", d)
+	}
+}
+
+func TestOpenCodeToolFailureGoesToLastTool(t *testing.T) {
+	recs := []status.Record{
+		rec(m(0), kC, "session.execution.started", I, W),
+		rec(m(1), kC, "session.tool.called", W, W, tool("edit")),
+		rec(m(2), kC, "session.tool.failed", W, W, detail("błąd narzędzia: Could not find oldString")),
+		rec(m(3), kC, "session.tool.called", W, W, tool("shell")),
+		rec(m(4), kC, "session.tool.failed", W, W, tool("shell")),
+		rec(m(5), kA, "PreToolUse", I, W, tool("shell")),
+	}
+	st := compute(t, recs)
+	got := map[string]ToolStat{}
+	for _, x := range st.Tools {
+		got[x.Agent+"/"+x.Tool] = x
+	}
+	if e := got["opencode/edit"]; e.Calls != 1 || e.Failures != 1 {
+		t.Errorf("edit = %+v", e)
+	}
+	if s := got["opencode/shell"]; s.Calls != 1 || s.Failures != 1 {
+		t.Errorf("opencode shell = %+v", s)
+	}
+	if s := got["claude/shell"]; s.Calls != 1 || s.Failures != 0 {
+		t.Errorf("claude shell = %+v (tools are per agent)", s)
+	}
+}

@@ -3,6 +3,7 @@ package stats
 import (
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"sort"
 	"strings"
@@ -38,17 +39,32 @@ func Report(w io.Writer, st *Stats) error {
 	p("- **waitShare** = waiting / (working + waiting): jaka część aktywnego czasu sesji to blokada na użytkowniku.\n")
 	p("- **Czas reakcji użytkownika** (`latency`, „epizod oczekiwania”): od wejścia sesji w `waiting` do wyjścia z niego; przypisany do godziny/dnia rozpoczęcia. Epizody dłuższe niż %s (użytkownik był nieobecny) są liczone osobno (`over4h`) i nie wchodzą do mediany / p90 / max. Gdy po prośbie o zgodę przychodzi `PostToolUse` (Claude Code nie zgłasza samej akceptacji), koniec oczekiwania to start narzędzia (czas zakończenia minus jego czas trwania).\n", dur(st.Caps.LatencyMaxSec))
 	p("- **Przyczyny** (`cause`) według zdarzenia, które zaczęło oczekiwanie: `permission` – prośba o zgodę na narzędzie (`zgoda: …`); `question` – pytanie agenta (`pytanie…`); `plan` – plan do akceptacji; `decision` – decyzja zadana na koniec tury (`decyzja: …`); `session_offer` – propozycja nowej sesji; `other` – reszta (ogólne powiadomienia, formularze).\n")
-	p("- **prompts** – polecenia użytkownika; **turns** – zakończone tury agenta (`working` → `idle`/`error`, albo `Stop` kończący turę pytaniem).\n")
+	p("- **Podagenci**: sesje podagentów (Claude Code z własnym id, dzieci sesji w OpenCode) nie są liczone jako sesje, a ich czas pracy jest osobno (`subagentWorkingSec`), bo biegnie w trakcie tury sesji głównej – inaczej byłby liczony dwa razy. Ich polecenia (zadanie od sesji głównej) i tury nie wchodzą do `prompts`/`turns`. W równoległości sesja główna z podagentami to jedna sesja.\n")
+	p("- **prompts** – polecenia użytkownika; **turns** – zakończone tury agenta (`working` → `idle`/`error`, albo `Stop` kończący turę pytaniem). **Długość tury** (`turnLength`): od polecenia do końca tury, z czekaniem na użytkownika w środku.\n")
+	p("- **idle** to czas otwartych sesji bez pracy (także noce i porzucone sesje, do 4 h na odcinek) – nie jest to czas użytkownika ani strata; do oceny przestojów służą „czas do kolejnego polecenia” i równoległość.\n")
 	p("- **Czas do kolejnego polecenia** (`nextPrompt`): od końca tury (`working` → `idle`) do następnego `working` tej sesji; tylko przerwy krótsze niż %s.\n", dur(st.Caps.NextPromptMaxSec))
 	p("- **Równoległość**: `avgWorking` – średnia liczba jednocześnie pracujących sesji (w całym okresie i w czasie, gdy pracowała co najmniej jedna); `activeSec` – czas, gdy co najmniej jedna sesja pracowała lub czekała; `anyWaitingSec` – czas, gdy co najmniej jedna czekała na użytkownika; `multiWaitingEvents` – ile razy liczba czekających sesji wzrosła do 2+.\n")
+	p("- **Zgody a tryb**: w trybie `auto` (i `bypassPermissions`) Claude Code nie pyta o zgody, więc 0 próśb nie znaczy, że allowlista jest kompletna – patrz „Tryby uprawnień sesji” i odmowy trybu auto (`PermissionDenied`). Zdarzenie `PermissionRequest` z opisem `pytanie: …` to pytanie agenta (AskUserQuestion), nie zgoda – liczy się jako `question`.\n")
+	p("- **Narzędzia** są liczone osobno dla każdego agenta (Claude Code: `Bash`, `Read`…; OpenCode: `shell`, `read`…). OpenCode nie zgłasza zakończenia narzędzia, więc nie ma dla niego czasów (`–`); błędy pochodzą z `session.tool.failed` – w zdarzeniach bez nazwy narzędzia (starsza wtyczka) błąd jest przypisany ostatniemu wywołanemu narzędziu sesji.\n")
 	p("- **Wzorce zgód** (`permissions.byPattern`): prośby o zgodę pogrupowane po narzędziu i znormalizowanym poleceniu: dla powłoki (Bash, PowerShell) najwyżej 2 pierwsze słowa polecenia, ucięte na fladze, ścieżce lub składni powłoki; adres URL → domena; inne argumenty (zwykle ścieżki) → samo narzędzie. Uwaga: zdarzenia zapisane przed 2026-11-16 mają przy Bash w Claude Code opis wywołania (`description`, np. „Run tests”) zamiast polecenia – wtedy wzorzec zawiera słowa opisu.\n")
 	p("- **Godziny i dni tygodnia**: czas lokalny serwera (%s), sumowane po wszystkich dniach okresu. `spanSec` – ile czasu okresu przypada na dany kubełek.\n", st.Period.TZ)
 	p("- Czasy podane jako s / min / h; w JSON zawsze sekundy.\n\n")
 
 	p("## Zakres danych\n\n")
 	p("- Zdarzeń w okresie: %d (plus %d wcześniejszych użytych tylko do stanu początkowego).\n", st.Coverage.Records, st.Coverage.LookbackRecs)
-	if !st.Coverage.First.IsZero() {
-		p("- Pierwsze / ostatnie zdarzenie: %s / %s.\n", ts(st.Coverage.First), ts(st.Coverage.Last))
+	cv := st.Coverage
+	if !cv.First.IsZero() {
+		p("- Pierwsze / ostatnie zdarzenie: %s / %s. Dni z danymi: %d z %.0f.\n", ts(cv.First), ts(cv.Last), cv.DaysWithData, math.Ceil(st.Period.Days))
+	}
+	if cv.ClaudeSessions > 0 {
+		p("- Sesje Claude Code: %d; z nazwą modelu: %d; z kosztem: %d (model i koszt daje tylko skrypt statusLine", cv.ClaudeSessions, cv.ClaudeWithModel, cv.ClaudeWithCost)
+		if len(cv.NoStatusline) > 0 {
+			p("; maszyny z sesjami Claude Code bez żadnego rekordu statusLine: %s", strings.Join(cv.NoStatusline, ", "))
+		}
+		p("). Tabele modeli i kosztu obejmują tylko te sesje.\n")
+	}
+	if len(st.SessionModes) > 0 {
+		p("- Tryby uprawnień sesji (ostatni widziany `permission_mode`, sesje główne; OpenCode go nie zgłasza): %s.\n", countList(st.SessionModes, 10))
 	}
 	if len(st.Coverage.Kinds) > 0 {
 		p("- Rodzaje zdarzeń: %s.\n", countList(st.Coverage.Kinds, 30))
@@ -66,8 +82,9 @@ func Report(w io.Writer, st *Stats) error {
 	t := st.Totals
 	par := st.Parallelism
 	p("## Podsumowanie\n\n| metryka | wartość |\n|---|---|\n")
-	p("| sesje aktywne | %d |\n| polecenia (prompts) | %d |\n| tury (turns) | %d |\n| wywołania narzędzi | %d |\n", t.Sessions, t.Prompts, t.Turns, t.ToolCalls)
-	p("| czas working | %s |\n| czas waiting (na użytkownika) | %s |\n| czas idle | %s |\n| czas error | %s |\n", dur(t.WorkingSec), dur(t.WaitingSec), dur(t.IdleSec), dur(t.ErrorSec))
+	p("| sesje aktywne | %d (+%d sesji podagentów) |\n| polecenia (prompts) | %d |\n| tury (turns) | %d |\n| wywołania narzędzi | %d |\n", t.Sessions, cv.SubagentSessions, t.Prompts, t.Turns, t.ToolCalls)
+	p("| czas working | %s (+%s pracy podagentów w tym czasie) |\n| czas waiting (na użytkownika) | %s |\n| czas idle (otwarte sesje bez pracy) | %s |\n| czas error | %s |\n", dur(t.WorkingSec), dur(t.SubagentWorkingSec), dur(t.WaitingSec), dur(t.IdleSec), dur(t.ErrorSec))
+	p("| długość tury | mediana %s, p90 %s (n=%d) |\n", dur(st.TurnLength.MedianSec), dur(st.TurnLength.P90Sec), st.TurnLength.Count)
 	p("| waitShare | %s |\n", pct(t.WaitShare))
 	p("| prośby o zgodę | %d |\n| epizody oczekiwania (≤ 4 h) | %d (mediana %s, p90 %s) |\n", t.Permissions, st.Latency.All.Count, dur(st.Latency.All.MedianSec), dur(st.Latency.All.P90Sec))
 	p("| epizody > 4 h / niezakończone na końcu okresu | %d / %d |\n", st.Latency.Over4h, st.Latency.OpenAtEnd)
@@ -89,12 +106,12 @@ func Report(w io.Writer, st *Stats) error {
 	p("| maks. pracujących naraz | %d%s |\n| maks. czekających naraz | %d%s |\n\n", par.MaxWorking, at(par.MaxWorkingAt, ts), par.MaxWaiting, at(par.MaxWaitingAt, ts))
 
 	timeTable := func(title string, gs []TimeGroup, skipEmpty bool) {
-		p("## %s\n\n| %s | working | waiting | idle | ≥1 aktywna | ≥1 czeka | śr. pracujących | polecenia | zgody | epizody | mediana reakcji | błędy |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n", title, "kubełek")
+		p("## %s\n\n| %s | working | waiting | ≥1 aktywna | ≥1 czeka | śr. pracujących | polecenia | zgody | epizody | mediana reakcji | błędy |\n|---|---|---|---|---|---|---|---|---|---|---|\n", title, "kubełek")
 		for _, g := range gs {
 			if skipEmpty && g.WorkingSec+g.WaitingSec+int64(g.Prompts) == 0 {
 				continue
 			}
-			p("| %s | %s | %s | %s | %s | %s | %.2f | %d | %d | %d | %s | %d |\n", g.Key, dur(g.WorkingSec), dur(g.WaitingSec), dur(g.IdleSec),
+			p("| %s | %s | %s | %s | %s | %.2f | %d | %d | %d | %s | %d |\n", g.Key, dur(g.WorkingSec), dur(g.WaitingSec),
 				dur(g.ActiveSec), dur(g.AnyWaitingSec), g.AvgWorking, g.Prompts, g.Permissions, g.Waits.Count, dur(g.Waits.MedianSec), g.Errors)
 		}
 		p("\n")
@@ -122,16 +139,33 @@ func Report(w io.Writer, st *Stats) error {
 	groupTable("Maszyny", st.ByHost, 30)
 	groupTable("Projekty", st.ByProject, 30)
 	groupTable("Agenci", st.ByAgent, 10)
-	groupTable("Modele", st.ByModel, 15)
+	if cv.ClaudeSessions > 0 && cv.ClaudeWithModel < cv.ClaudeSessions {
+		groupTable(fmt.Sprintf("Modele (sesje Claude Code bez statusLine są w „(nieznany)”: %d z %d)", cv.ClaudeSessions-cv.ClaudeWithModel, cv.ClaudeSessions), st.ByModel, 15)
+	} else {
+		groupTable("Modele", st.ByModel, 15)
+	}
 	costReport(p, st)
 
 	pm := st.Permissions
-	p("## Prośby o zgodę\n\nRazem: %d. Według narzędzia: %s.\n\n", pm.Total, countList(pm.ByTool, 15))
+	p("## Prośby o zgodę\n\n")
+	if pm.Total == 0 {
+		p("Razem: 0. Tryby uprawnień sesji: %s.\n\n", orDash(countList(st.SessionModes, 10)))
+	} else {
+		p("Razem: %d. Według narzędzia: %s.\n\n", pm.Total, countList(pm.ByTool, 15))
+	}
 	if len(pm.ByMode) > 0 {
 		p("Według trybu uprawnień sesji (`permission_mode`): %s.\n\n", countList(pm.ByMode, 10))
 	}
 	if len(pm.Denied) > 0 {
-		p("Odmowy w trybie auto (`PermissionDenied`), według powodu: %s.\n\n", countList(pm.Denied, 10))
+		p("Odmowy w trybie auto (`PermissionDenied`), według powodu: %s. Co zostało odmówione:\n\n", countList(pm.Denied, 10))
+		for i, d := range pm.DeniedDetails {
+			if i == 15 {
+				p("- … i %d więcej (w /api/stats)\n", len(pm.DeniedDetails)-15)
+				break
+			}
+			p("- %d× %s\n", d.Count, cell(d.Key))
+		}
+		p("\n")
 	}
 	if len(pm.ByPattern) > 0 {
 		p("| wzorzec | narzędzie | liczba | sesje | projekty | mediana reakcji | suma czekania | przykład |\n|---|---|---|---|---|---|---|---|\n")
@@ -146,17 +180,20 @@ func Report(w io.Writer, st *Stats) error {
 	}
 
 	if len(st.Tools) > 0 {
-		p("## Narzędzia\n\n| narzędzie | wywołania | zakończone | błędy | %% błędów | śr. czas | maks. czas | zgody |\n|---|---|---|---|---|---|---|---|\n")
+		p("## Narzędzia\n\n| narzędzie | agent | wywołania | zakończone | błędy | %% błędów | śr. czas | maks. czas | zgody |\n|---|---|---|---|---|---|---|---|---|\n")
 		for i, x := range st.Tools {
 			if i == 30 {
-				p("| … i %d więcej | | | | | | | |\n", len(st.Tools)-30)
+				p("| … i %d więcej | | | | | | | | |\n", len(st.Tools)-30)
 				break
 			}
-			avg, mx := "–", "–"
+			avg, mx, completed := "–", "–", "–"
 			if x.Timed > 0 {
 				avg, mx = ms(x.AvgMs), ms(x.MaxMs)
 			}
-			p("| %s | %d | %d | %d | %s | %s | %s | %d |\n", cell(x.Tool), x.Calls, x.Completed, x.Failures, pct(x.FailureRate), avg, mx, x.Permissions)
+			if x.Completed > 0 {
+				completed = fmt.Sprint(x.Completed)
+			}
+			p("| %s | %s | %d | %s | %d | %s | %s | %s | %d |\n", cell(x.Tool), x.Agent, x.Calls, completed, x.Failures, pct(x.FailureRate), avg, mx, x.Permissions)
 		}
 		p("\n")
 	}
@@ -169,14 +206,27 @@ func Report(w io.Writer, st *Stats) error {
 	p("- Przerwania: %s.\n\n", orDash(countList(st.Interruptions, 10)))
 
 	p("## Sesje\n\n")
-	rows := st.Sessions
+	var rows []SessionRow
+	var subN int
+	var subWork int64
+	for _, r := range st.Sessions {
+		if r.Parent != "" {
+			subN++
+			subWork += r.WorkingSec
+			continue
+		}
+		rows = append(rows, r)
+	}
+	if subN > 0 {
+		p("Sesje podagentów (%d, łącznie %s pracy) są pominięte; mają w /api/stats pole `parent`.\n\n", subN, dur(subWork))
+	}
 	if len(rows) > 60 {
-		rows = append([]SessionRow(nil), rows...)
+		total := len(rows)
 		sort.Slice(rows, func(i, j int) bool {
 			return rows[i].WorkingSec+rows[i].WaitingSec > rows[j].WorkingSec+rows[j].WaitingSec
 		})
 		rows = rows[:60]
-		p("%d sesji; poniżej 60 z największym czasem working+waiting (pełna lista w /api/stats).\n\n", len(st.Sessions))
+		p("%d sesji; poniżej 60 z największym czasem working+waiting (pełna lista w /api/stats).\n\n", total)
 	}
 	p("| sesja | maszyna | projekt | agent / model | początek | koniec | working | waiting | polecenia | tury | zgody | epizody | najdłuższe czekanie | błędy | kompakt. | stan na końcu |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, r := range rows {
@@ -230,7 +280,10 @@ func signals(st *Stats, ts func(time.Time) string) []string {
 		for _, d := range st.Permissions.Denied {
 			total += d.Count
 		}
-		add("Odmowy w trybie auto (`PermissionDenied`): %d; najczęstszy powód: %s.", total, st.Permissions.Denied[0].Key)
+		add("Odmowy w trybie auto (`PermissionDenied`): %d; najczęstszy powód: %s; odmówione: %s.", total, st.Permissions.Denied[0].Key, countList(st.Permissions.DeniedDetails, 5))
+	}
+	if st.Permissions.Total == 0 && len(st.SessionModes) > 0 {
+		add("Brak próśb o zgodę; tryby uprawnień sesji: %s.", countList(st.SessionModes, 5))
 	}
 
 	// Sessions that waited longest in total and in one go.
@@ -258,14 +311,15 @@ func signals(st *Stats, ts func(time.Time) string) []string {
 		g     TimeGroup
 	}
 	var hs []hourShare
+	// Only hours with enough activity and episodes, and a share worth noting.
 	for _, g := range st.ByHour {
-		if g.ActiveSec >= 600 {
+		if g.ActiveSec >= 600 && g.Waits.Count >= 3 {
 			hs = append(hs, hourShare{g.Key, ratio(float64(g.AnyWaitingSec), float64(g.ActiveSec)), g})
 		}
 	}
 	sort.Slice(hs, func(i, j int) bool { return hs[i].share > hs[j].share })
 	for i, h := range hs {
-		if i == 3 || h.share == 0 {
+		if i == 3 || h.share < 0.1 {
 			break
 		}
 		add("Godzina %s:00: przez %s czasu aktywnego co najmniej jedna sesja czekała na użytkownika (%s z %s); mediana reakcji %s (n=%d), średnio %.2f pracujących sesji.",
@@ -290,9 +344,34 @@ func signals(st *Stats, ts func(time.Time) string) []string {
 		add("Równoległość: średnio %.2f sesji pracuje naraz, gdy cokolwiek pracuje (maks. %d); przez %s czasu aktywnego co najmniej jedna sesja czekała na użytkownika; 2+ sesje czekały naraz %d razy (łącznie %s).",
 			par.AvgWorkingWhenActive, par.MaxWorking, pct(par.AnyWaitingShareOfActive), par.MultiWaitingEvents, dur(par.MultiWaitingSec))
 	}
+	if days := st.Coverage.DaysWithData; days > 0 && par.PeriodSec > 0 {
+		add("Wykorzystanie: co najmniej jedna sesja pracowała łącznie %s, czyli średnio %s na dzień z danymi (%d dni); średnio %.2f sesji pracuje naraz, gdy cokolwiek pracuje.",
+			dur(par.AnyWorkingSec), dur(par.AnyWorkingSec/int64(days)), days, par.AvgWorkingWhenActive)
+	}
+	if tl := st.TurnLength; tl.Count > 0 {
+		add("Tura (od polecenia do końca, z czekaniem) trwa medianę %s, p90 %s (n=%d).", dur(tl.MedianSec), dur(tl.P90Sec), tl.Count)
+	}
 	if st.NextPrompt.Count > 0 {
-		add("Po zakończonej turze kolejne polecenie przychodzi po medianie %s (p90 %s, n=%d); suma tych przerw %s.",
-			dur(st.NextPrompt.MedianSec), dur(st.NextPrompt.P90Sec), st.NextPrompt.Count, dur(st.NextPrompt.TotalSec))
+		add("Po zakończonej turze kolejne polecenie w tej samej sesji przychodzi po medianie %s (p90 %s, n=%d).",
+			dur(st.NextPrompt.MedianSec), dur(st.NextPrompt.P90Sec), st.NextPrompt.Count)
+	}
+	// Long-lived sessions: many prompts over days, often with compactions.
+	long := 0
+	for _, r := range st.Sessions {
+		span := r.End.Sub(r.Start)
+		if r.Parent != "" || span < 24*time.Hour || (r.Prompts < 30 && r.Compactions < 2) || long == 3 {
+			continue
+		}
+		long++
+		add("Długa sesja `%s` (%s): %.1f dni od pierwszego do ostatniego zdarzenia, %d poleceń, %d kompaktowań.",
+			r.Key, orNone(r.Project), span.Hours()/24, r.Prompts, r.Compactions)
+	}
+	// Sessions still "working" long after their last event: a lost event or a hung agent.
+	for _, r := range st.Sessions {
+		if r.Parent == "" && r.LastState == "working" && st.Period.To.Sub(r.End) > time.Hour {
+			add("Sesja `%s` (%s) ma na końcu stan `working`, ale ostatnia aktywność to %s (zgubione zdarzenie albo zawieszony agent; jej praca liczy się najwyżej 30 min po ostatnim zdarzeniu).",
+				r.Key, orNone(r.Project), ts(r.End))
+		}
 	}
 
 	if len(st.Errors) > 0 {
@@ -315,7 +394,7 @@ func signals(st *Stats, ts func(time.Time) string) []string {
 	for _, x := range st.Tools {
 		calls := max(x.Calls, x.Completed)
 		if calls >= 5 && x.FailureRate >= 0.1 {
-			add("Narzędzie `%s`: %d błędów na %d wywołań (%s).", x.Tool, x.Failures, calls, pct(x.FailureRate))
+			add("Narzędzie `%s` (%s): %d błędów na %d wywołań (%s).", x.Tool, x.Agent, x.Failures, calls, pct(x.FailureRate))
 		}
 	}
 	var slowTools []ToolStat
@@ -329,7 +408,7 @@ func signals(st *Stats, ts func(time.Time) string) []string {
 		if i == 3 {
 			break
 		}
-		add("Narzędzie `%s` zajęło łącznie %s (%d wywołań z czasem, średnio %s, maks. %s).", x.Tool, ms(x.TotalMs), x.Timed, ms(x.AvgMs), ms(x.MaxMs))
+		add("Narzędzie `%s` (%s) zajęło łącznie %s (%d wywołań z czasem, średnio %s, maks. %s).", x.Tool, x.Agent, ms(x.TotalMs), x.Timed, ms(x.AvgMs), ms(x.MaxMs))
 	}
 	if len(st.Interruptions) > 0 {
 		total := 0

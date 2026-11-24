@@ -573,6 +573,7 @@ func ParseOpenCode(fallbackHost string, body []byte, at time.Time) (Event, error
 		ev.Tool = clip(d.Name)
 		ev.Detail = toolDetail(firstNonEmpty(d.Name, "narzędzie"), d.Input)
 	case "session.tool.failed":
+		ev.Tool = clip(d.Name) // plugins since 2026-11-24 repeat the name
 		ev.Detail = clip("błąd narzędzia: " + d.Error.text())
 	case "session.text.ended":
 		ev.Message = clipLong(d.Text)
