@@ -46,14 +46,14 @@ while [ $# -gt 0 ]; do
     --skip-statusline) SKIP_STATUSLINE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --ref) REF="$2"; shift 2 ;;
-    *) echo "Nieznana opcja: $1" >&2; exit 2 ;;
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
 REPO="https://raw.githubusercontent.com/Enzovera/agent-status/$REF"
 
 if [ "$UNINSTALL" = 0 ] && [ -z "$SERVER" ]; then
-  echo "Podaj adres serwera: --server 192.168.1.10 (albo host:port)" >&2
+  echo "Give the server address: --server 192.168.1.10 (or host:port)" >&2
   exit 2
 fi
 if [ -n "$SERVER" ]; then
@@ -92,7 +92,7 @@ install_claude() {
     cp "$settings" "$settings.bak"
   fi
   if [ -z "$RUNNER" ]; then
-    echo "Claude Code: brak python3 i node - dopisz ręcznie clients/claude/hooks.json do $settings" >&2
+    echo "Claude Code: no python3 or node - add clients/claude/hooks.json to $settings by hand" >&2
     return 0
   fi
   # Statusline: the script goes in first; the JSON step below points statusLine at it,
@@ -107,7 +107,7 @@ install_claude() {
         AS_SL_CMD="sh ~/.claude/agent-status/statusline.sh '$SERVER/hook/statusline?host=$(urlencode "$NAME")'"
       else
         AS_STATUSLINE=0
-        echo "UWAGA: statusline: nie udało się pobrać clients/claude/statusline/statusline.sh" >&2
+        echo "WARNING: statusline: could not download clients/claude/statusline/statusline.sh" >&2
       fi
     fi
   fi
@@ -146,10 +146,10 @@ if os.environ.get("AS_STATUSLINE") == "1":
             if os.path.exists(org):
                 with open(org, encoding="utf-8") as f:
                     s["statusLine"] = json.load(f)
-                print("Statusline: przywrócono Twój poprzedni statusLine")
+                print("Statusline: your previous statusLine restored")
             else:
                 s.pop("statusLine")
-                print("Statusline: usunięto")
+                print("Statusline: removed")
     else:
         cmd = os.environ["AS_SL_CMD"]
         chained = False
@@ -169,7 +169,7 @@ if os.environ.get("AS_STATUSLINE") == "1":
             for p in (nxt, org):
                 if os.path.exists(p): os.remove(p)
             s["statusLine"] = {"type": "command", "command": cmd}
-        print("Statusline: kontekst i koszt sesji wysyłane na serwer" + (" (Twój poprzedni statusline działa dalej)" if chained else ""))
+        print("Statusline: session context use and cost sent to the server" + (" (your previous statusline keeps running)" if chained else ""))
 with open(path, "w", encoding="utf-8") as f:
     json.dump(s, f, indent=2, ensure_ascii=False)
     f.write("\n")
@@ -205,10 +205,10 @@ if (process.env.AS_STATUSLINE === "1") {
     if (oursSl) {
       if (fs.existsSync(org)) {
         s.statusLine = JSON.parse(fs.readFileSync(org, "utf8"))
-        console.log("Statusline: przywrócono Twój poprzedni statusLine")
+        console.log("Statusline: your previous statusLine restored")
       } else {
         delete s.statusLine
-        console.log("Statusline: usunięto")
+        console.log("Statusline: removed")
       }
     }
   } else {
@@ -226,7 +226,7 @@ if (process.env.AS_STATUSLINE === "1") {
       for (const p of [nxt, org]) if (fs.existsSync(p)) fs.rmSync(p)
       s.statusLine = { type: "command", command: cmd }
     }
-    console.log("Statusline: kontekst i koszt sesji wysyłane na serwer" + (chained ? " (Twój poprzedni statusline działa dalej)" : ""))
+    console.log("Statusline: session context use and cost sent to the server" + (chained ? " (your previous statusline keeps running)" : ""))
   }
 }
 fs.writeFileSync(path, JSON.stringify(s, null, 2) + "\n")
@@ -236,15 +236,15 @@ JS
     rm -f "$sl_dir/statusline.sh" "$sl_dir/statusline.ps1" "$sl_dir/statusline-next" "$sl_dir/statusline-orig.json"
     rmdir "$sl_dir" 2>/dev/null || true
   fi
-  if [ "$UNINSTALL" = 1 ]; then echo "Claude Code: usunięto hooki z $settings"
-  else echo "Claude Code: hooki dopisane do $settings (kopia: settings.json.bak)"; fi
+  if [ "$UNINSTALL" = 1 ]; then echo "Claude Code: hooks removed from $settings"
+  else echo "Claude Code: hooks added to $settings (backup: settings.json.bak)"; fi
 }
 
 install_opencode() {
   dir="$HOME/.config/opencode/plugins"
   path="$dir/agent-status.ts"
   if [ "$UNINSTALL" = 1 ]; then
-    [ -f "$path" ] && rm "$path" && echo "OpenCode: usunięto $path"
+    [ -f "$path" ] && rm "$path" && echo "OpenCode: removed $path"
     return 0
   fi
   mkdir -p "$dir"
@@ -257,7 +257,7 @@ install_opencode() {
       -e "s|process.env.AGENT_STATUS_HOST ?? hostname()|process.env.AGENT_STATUS_HOST ?? \"$esc_name\"|" \
       "$tmp" > "$path"
   rm -f "$tmp"
-  echo "OpenCode: plugin zapisany w $path"
+  echo "OpenCode: plugin written to $path"
 }
 
 SKILL_NAME="agent-flow-review"
@@ -268,7 +268,7 @@ install_skill() {
   dir="$HOME/.claude/skills/$SKILL_NAME"
   path="$dir/SKILL.md"
   if [ "$UNINSTALL" = 1 ]; then
-    if [ -f "$path" ]; then rm -f "$path" && echo "Skill: usunięto $path"; fi
+    if [ -f "$path" ]; then rm -f "$path" && echo "Skill: removed $path"; fi
     rmdir "$dir" 2>/dev/null || true
     return 0
   fi
@@ -281,14 +281,14 @@ install_skill() {
     cp "$local_src" "$tmp"
   elif ! curl -fsSL "$REPO/clients/claude/skills/$SKILL_NAME/SKILL.md" -o "$tmp"; then
     rm -f "$tmp"
-    echo "UWAGA: skill: nie udało się pobrać $REPO/clients/claude/skills/$SKILL_NAME/SKILL.md" >&2
+    echo "WARNING: skill: could not download $REPO/clients/claude/skills/$SKILL_NAME/SKILL.md" >&2
     return 0
   fi
   mkdir -p "$dir"
   esc_server=$(printf '%s' "$SERVER" | sed 's/[\/&|]/\\&/g')
   sed -e "s|http://SERVER:7777|$esc_server|g" "$tmp" > "$path"
   rm -f "$tmp"
-  echo "Skill: zapisany w $path - w Claude Code: /$SKILL_NAME (analiza statystyk i rekomendacje)"
+  echo "Skill: written to $path - in Claude Code: /$SKILL_NAME (stats analysis and recommendations)"
 }
 
 HB_LABEL="com.agent-status.heartbeat"
@@ -382,9 +382,9 @@ install_heartbeat_launchd() {
     sleep 1
   done
   if launchctl list "$HB_LABEL" >/dev/null 2>&1; then
-    echo "Heartbeat: LaunchAgent $HB_PLIST (co minutę)"
+    echo "Heartbeat: LaunchAgent $HB_PLIST (every minute)"
   else
-    echo "UWAGA: heartbeat: zapisano $HB_PLIST, ale launchctl go nie wczytał (zadziała po ponownym zalogowaniu)." >&2
+    echo "WARNING: heartbeat: wrote $HB_PLIST, but launchctl did not load it (it will work after logging in again)." >&2
   fi
 }
 
@@ -392,9 +392,9 @@ install_heartbeat_cron() {
   # cron turns an unescaped % into a newline.
   cmd="$(hb_argv | sed -e "s/'/'\\\\''/g" -e "s/.*/'&'/" -e 's/%/\\%/g' | tr '\n' ' ')"
   hb_cron_set "* * * * * $cmd>/dev/null 2>&1 $HB_MARK" || return 1
-  echo "Heartbeat: wpis w crontab użytkownika (co minutę, znacznik '$HB_MARK')"
+  echo "Heartbeat: line in the user crontab (every minute, tagged '$HB_MARK')"
   if command -v pgrep >/dev/null 2>&1 && ! pgrep -x cron >/dev/null 2>&1 && ! pgrep -x crond >/dev/null 2>&1; then
-    echo "UWAGA: nie widać działającego demona cron (cron/crond) - włącz go, inaczej heartbeat nie będzie wysyłany." >&2
+    echo "WARNING: no running cron daemon (cron/crond) found - start it, otherwise the heartbeat will not be sent." >&2
   fi
 }
 
@@ -404,30 +404,30 @@ install_heartbeat_systemd() {
   exec_start="$(hb_argv | sed -e 's/[\\"]/\\&/g' -e 's/%/%%/g' -e 's/\$/$$/g' -e 's/.*/"&"/' | tr '\n' ' ')"
   printf '%s\n' '[Unit]' 'Description=agent-status heartbeat' '' \
     '[Service]' 'Type=oneshot' "ExecStart=$exec_start" > "$HB_UNIT_DIR/$HB_UNIT.service"
-  printf '%s\n' '[Unit]' 'Description=agent-status heartbeat co minutę' '' \
+  printf '%s\n' '[Unit]' 'Description=agent-status heartbeat every minute' '' \
     '[Timer]' 'OnBootSec=30' 'OnUnitActiveSec=60' 'AccuracySec=5s' '' \
     '[Install]' 'WantedBy=timers.target' > "$HB_UNIT_DIR/$HB_UNIT.timer"
   systemctl --user daemon-reload &&
     systemctl --user enable "$HB_UNIT.timer" >/dev/null 2>&1 &&
     systemctl --user restart "$HB_UNIT.timer" || return 1
-  echo "Heartbeat: timer systemd --user $HB_UNIT.timer (co minutę)"
+  echo "Heartbeat: systemd --user timer $HB_UNIT.timer (every minute)"
   if [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)" != yes ]; then
-    echo "UWAGA: bez 'loginctl enable-linger $(id -un)' heartbeat działa tylko, gdy jesteś zalogowany." >&2
+    echo "WARNING: without 'loginctl enable-linger $(id -un)' the heartbeat only runs while you are logged in." >&2
   fi
 }
 
 install_heartbeat() {
   if [ "$UNINSTALL" = 1 ]; then
     if [ "$(uname -s)" = Darwin ]; then
-      hb_remove_launchd && echo "Heartbeat: usunięto $HB_PLIST"
+      hb_remove_launchd && echo "Heartbeat: removed $HB_PLIST"
     else
-      command -v crontab >/dev/null 2>&1 && hb_cron_set "" && echo "Heartbeat: usunięto wpis z crontab"
-      hb_remove_systemd && echo "Heartbeat: usunięto timer systemd --user $HB_UNIT.timer"
+      command -v crontab >/dev/null 2>&1 && hb_cron_set "" && echo "Heartbeat: removed the crontab line"
+      hb_remove_systemd && echo "Heartbeat: removed systemd --user timer $HB_UNIT.timer"
     fi
     return 0
   fi
   if [ -z "$HB_CURL" ] && [ -z "$HB_WGET" ]; then
-    echo "Heartbeat: pominięto (brak curl i wget)" >&2
+    echo "Heartbeat: skipped (no curl or wget)" >&2
     return 0
   fi
   if [ "$(uname -s)" = Darwin ]; then
@@ -440,36 +440,36 @@ install_heartbeat() {
   elif has_systemd_user; then
     install_heartbeat_systemd
   else
-    echo "Heartbeat: pominięto (nie da się użyć crontab ani systemd --user) - maszyna nie będzie widoczna jako online." >&2
+    echo "Heartbeat: skipped (neither crontab nor systemd --user is usable) - the machine will not show as online." >&2
   fi
 }
 
 if [ "$SKIP_CLAUDE" = 0 ] && { [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; }; then
   install_claude
-  if [ "$SKIP_SKILL" = 0 ]; then install_skill; else echo "Skill: pominięto (--skip-skill)"; fi
+  if [ "$SKIP_SKILL" = 0 ]; then install_skill; else echo "Skill: skipped (--skip-skill)"; fi
 else
-  echo "Claude Code: pominięto (nie znaleziono)"
+  echo "Claude Code: skipped (not found)"
 fi
 if [ "$SKIP_OPENCODE" = 0 ] && { [ -d "$HOME/.config/opencode" ] || command -v opencode >/dev/null 2>&1; }; then
   install_opencode
 else
-  echo "OpenCode: pominięto (nie znaleziono)"
+  echo "OpenCode: skipped (not found)"
 fi
 if [ "$SKIP_HEARTBEAT" = 0 ]; then
-  install_heartbeat || echo "UWAGA: nie udało się ustawić heartbeatu." >&2
+  install_heartbeat || echo "WARNING: could not set up the heartbeat." >&2
 else
-  echo "Heartbeat: pominięto (--skip-heartbeat)"
+  echo "Heartbeat: skipped (--skip-heartbeat)"
 fi
 
 if [ "$UNINSTALL" = 0 ]; then
   if curl -fsS -m 3 "$SERVER/api/sessions" >/dev/null 2>&1; then
-    echo "Serwer $SERVER odpowiada."
+    echo "Server $SERVER responds."
     # First heartbeat now, so the machine shows as online without waiting a minute.
     if [ "$SKIP_HEARTBEAT" = 0 ] && { [ -n "$HB_CURL" ] || [ -n "$HB_WGET" ]; }; then
-      hb_send || echo "UWAGA: serwer nie przyjął heartbeatu. Zaktualizuj serwer." >&2
+      hb_send || echo "WARNING: the server did not accept the heartbeat. Update the server." >&2
     fi
   else
-    echo "UWAGA: serwer $SERVER nie odpowiada. Sprawdź adres i zaporę na serwerze (port TCP)." >&2
+    echo "WARNING: server $SERVER does not respond. Check the address and the firewall on the server (TCP port)." >&2
   fi
-  echo "Gotowe. Nowe sesje będą widoczne jako '$NAME'. Uruchom ponownie otwarte sesje Claude Code / OpenCode."
+  echo "Done. New sessions will show up as '$NAME'. Restart open Claude Code / OpenCode sessions."
 fi

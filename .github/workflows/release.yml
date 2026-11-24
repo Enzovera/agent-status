@@ -34,16 +34,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file - <<'EOF'
-          Serwer: pobierz plik dla swojego systemu (`windows-amd64.exe`, `linux-amd64`, `darwin-arm64` itd.) i uruchom `-addr :7777`.
+          Server: download the file for your system (`windows-amd64.exe`, `linux-amd64`, `darwin-arm64` etc.) and run it with `-addr :7777`.
 
-          Klienci (urządzenia z Claude Code / OpenCode), Windows:
+          Clients (devices with Claude Code / OpenCode), Windows:
           ```powershell
-          & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Enzovera/agent-status/main/install/client.ps1))) -Server IP_SERWERA
+          & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Enzovera/agent-status/main/install/client.ps1))) -Server SERVER_IP
           ```
           macOS / Linux:
           ```sh
-          curl -fsSL https://raw.githubusercontent.com/Enzovera/agent-status/main/install/client.sh | sh -s -- --server IP_SERWERA
+          curl -fsSL https://raw.githubusercontent.com/Enzovera/agent-status/main/install/client.sh | sh -s -- --server SERVER_IP
           ```
 
-          Szczegóły w README.
+          Details in the README.
           EOF

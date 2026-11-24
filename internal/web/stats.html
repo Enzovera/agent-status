@@ -8,6 +8,8 @@
   // Set before the first paint, so the page never flashes in the other theme.
   try { document.documentElement.dataset.theme = localStorage.getItem("theme") === "light" ? "light" : "dark"; }
   catch { document.documentElement.dataset.theme = "dark"; }
+  // Polish unless switched to English (the language button); shared with the status page.
+  try { document.documentElement.lang = localStorage.getItem("lang") === "en" ? "en" : "pl"; } catch {}
 </script>
 <style>
   /* Same tokens as the status page (index.html). */
@@ -42,6 +44,8 @@
     background: var(--panel); color: var(--muted); text-decoration: none; display: inline-flex; align-items: center;
   }
   .group > * + * { border-left: 1px solid var(--line) !important; }
+  /* Language: the code of the language shown now, in place of an icon. */
+  .group button.lang { font: 600 13px/1 var(--mono); letter-spacing: .04em; min-width: 38px; justify-content: center; }
   .group button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
   .group button:focus-visible, .group a:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
   button, a { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
@@ -137,22 +141,27 @@
     .axis span { overflow: visible; font-size: 10px; }
     .tile .v { font-size: 20px; }
   }
+  /* A narrow phone: a little less padding keeps both groups (with the language button) on one line. */
+  @media (max-width: 420px) {
+    .group button, .group a, .group button.lang { padding: 4px 5px; min-width: 32px; justify-content: center; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1><a href="/" title="Wróć do listy sesji">← agenci</a>Statystyki</h1>
+  <h1><a href="/" title="Wróć do listy sesji" data-t-title="back" data-t="agentsBack">← agenci</a><span data-t="statistics">Statystyki</span></h1>
   <div class="bar">
-    <div class="group" role="group" aria-label="Okres">
-      <button type="button" data-days="1">1<span class="long"> dzień</span><span class="short">d</span></button>
-      <button type="button" data-days="7">7<span class="long"> dni</span><span class="short">d</span></button>
-      <button type="button" data-days="30">30<span class="long"> dni</span><span class="short">d</span></button>
+    <div class="group" role="group" aria-label="Okres" data-t-aria="period">
+      <button type="button" data-days="1">1<span class="long" data-t="oneDay"> dzień</span><span class="short">d</span></button>
+      <button type="button" data-days="7">7<span class="long" data-t="nDays"> dni</span><span class="short">d</span></button>
+      <button type="button" data-days="30">30<span class="long" data-t="nDays"> dni</span><span class="short">d</span></button>
     </div>
-    <div class="group" role="group" aria-label="Dane">
+    <div class="group" role="group" aria-label="Dane" data-t-aria="data">
       <button type="button" id="theme" class="theme"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg></button>
-      <a id="report" href="/api/report" target="_blank" rel="noopener" title="Raport Markdown dla agenta AI"><span class="long">raport dla AI</span><span class="short">raport AI</span></a>
-      <a id="events" href="/api/events" target="_blank" rel="noopener" title="Surowe zdarzenia (JSON lines)"><span class="long">zdarzenia</span><span class="short">zdarz.</span></a>
-      <a id="json" href="/api/stats" target="_blank" rel="noopener" title="Statystyki jako JSON">JSON</a>
+      <button type="button" id="lang" class="lang"></button>
+      <a id="report" href="/api/report" target="_blank" rel="noopener" title="Raport Markdown dla agenta AI" data-t-title="reportTitle"><span class="long" data-t="reportLong">raport dla AI</span><span class="short" data-t="reportShort">raport AI</span></a>
+      <a id="events" href="/api/events" target="_blank" rel="noopener" title="Surowe zdarzenia (JSON lines)" data-t-title="eventsTitle"><span class="long" data-t="eventsLong">zdarzenia</span><span class="short" data-t="eventsShort">zdarz.</span></a>
+      <a id="json" href="/api/stats" target="_blank" rel="noopener" title="Statystyki jako JSON" data-t-title="jsonTitle">JSON</a>
     </div>
   </div>
 </header>
@@ -160,12 +169,195 @@
 <div id="offline" class="offline" hidden></div>
 <main id="main"></main>
 <script>
+// Language: Polish or English, the same switch as on the status page (shared through
+// localStorage "lang"). Every text the page writes itself comes from TEXT; what the server
+// sends (keys such as weekdays, error and interruption texts) is Polish and goes through
+// srv(), which swaps only its known fixed parts.
+let lang = document.documentElement.lang === "en" ? "en" : "pl";
+const p3 = (n, one, few, many) => {   // Polish: 1 sesja, 2 sesje, 5 sesji
+  if (n === 1) return one;
+  const d = n % 10, dd = n % 100;
+  return d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
+};
+const p2 = (n, one, other) => n === 1 ? one : other;
+const TEXT = {
+  pl: {
+    title: "Statystyki agentów", agentsBack: "← agenci", back: "Wróć do listy sesji", statistics: "Statystyki",
+    period: "Okres", oneDay: " dzień", nDays: " dni", data: "Dane",
+    reportTitle: "Raport Markdown dla agenta AI", reportLong: "raport dla AI", reportShort: "raport AI",
+    eventsTitle: "Surowe zdarzenia (JSON lines)", eventsLong: "zdarzenia", eventsShort: "zdarz.", jsonTitle: "Statystyki jako JSON",
+    themeDark: "Ciemny motyw. Kliknij, aby przełączyć na jasny", themeLight: "Jasny motyw. Kliknij, aby przełączyć na ciemny",
+    toLight: "Przełącz na jasny motyw", toDark: "Przełącz na ciemny motyw",
+    langTitle: "Język: polski. Kliknij, aby przełączyć na angielski", langAria: "Język: polski. Przełącz na angielski",
+    "cause.permission": "zgoda", "cause.question": "pytanie", "cause.plan": "plan", "cause.decision": "decyzja",
+    "cause.session_offer": "propozycja sesji", "cause.other": "inne",
+    "state.working": "pracuje", "state.waiting": "czeka", "state.idle": "gotowy", "state.error": "błąd", "state.ended": "zakończona",
+    loadFailed: m => "Nie udało się pobrać statystyk: " + m,
+    tapBar: "Dotknij słupka, by zobaczyć szczegóły.",
+    work: d => "praca " + d, waitingForYou: d => "czekanie na Ciebie " + d, waitingShort: d => "czeka " + d,
+    anyWaiting: (d, a) => "≥1 czeka " + d + " z " + a + " aktywnych", avgWorking: n => "średnio " + n + " pracujących",
+    medianResponse: d => "mediana reakcji " + d,
+    // Counted nouns: the number comes formatted (1 234), the form is picked by the plain n.
+    nPrompts: (n, s) => s + " " + p3(n, "polecenie", "polecenia", "poleceń"),
+    nPermissions: (n, s) => s + " " + p3(n, "zgoda", "zgody", "zgód"),
+    nSessions: (n, s) => s + " " + p3(n, "sesja", "sesje", "sesji"),
+    nEvents: (n, s) => s + " " + p3(n, "zdarzenie", "zdarzenia", "zdarzeń"),
+    nTurns: (n, s) => s + " " + p3(n, "tura", "tury", "tur"),
+    nTimes: (n, s) => s + " " + p3(n, "raz", "razy", "razy"),
+    nPatterns: (n, s) => s + " " + p3(n, "wzorzec", "wzorce", "wzorców"),
+    nInterruptions: (n, s) => s + " " + p3(n, "przerwanie", "przerwania", "przerwań"),
+    nOver4h: (n, s) => s + " " + p3(n, "epizod", "epizody", "epizodów") + " ponad 4 h pominięto",
+    noData: "Brak danych.", none: "Brak.",
+    noEvents: "Brak zdarzeń w tym okresie. Statystyki zbierają się od chwili włączenia archiwum.",
+    tWork: "Praca agentów", tWaiting: "Czekanie na Ciebie", tWaitingNote: p => p + " aktywnego czasu sesji",
+    tResponse: "Twój czas reakcji", tResponseNote: (p90, times) => "mediana · p90 " + p90 + " · " + times,
+    tPermissions: "Prośby o zgodę", tPrompts: "Polecenia", tPromptsNote: d => "kolejne po " + d + " (mediana)",
+    tParallel: "Równolegle", tParallelNote: m => "średnio pracujących · maks. " + m,
+    tSomeoneWaits: "Ktoś czeka", tSomeoneWaitsNote: n => "czasu aktywnego · 2+ naraz: " + n + "×",
+    tErrors: "Błędy · kompaktowania",
+    lgWork: "praca", lgWaiting: "czeka na Ciebie",
+    sHours: "Pora dnia", sumPeriod: "suma z całego okresu", sDays: "Dni", sWeekdays: "Dni tygodnia",
+    sCauses: "Na co czekają sesje", upTo4h: "epizody do 4 h",
+    hCause: "przyczyna", hTimes: "razy", hMedian: "mediana", hP90: "p90", hTotal: "suma",
+    stillWaiting: n => n + " nadal czeka",
+    sParallel: "Równoległość", hMeasure: "miara", hValue: "wartość",
+    pAvg: "średnio pracujących (gdy coś pracuje)", pMaxWorking: "maks. pracujących naraz",
+    pMaxWaiting: "maks. czekających naraz", pActive: "coś pracuje lub czeka", pAny: "≥1 czeka na Ciebie",
+    pMulti: "≥2 czekają naraz",
+    sMachines: "Maszyny", sProjects: "Projekty",
+    sPerms: "Powtarzające się prośby o zgodę", permsNote: "kandydaci do allowlisty",
+    hPattern: "wzorzec", hSessions: "sesje", hProjects: "projekty", hMedianResponse: "mediana reakcji",
+    hWaitTotal: "suma czekania", noPerms: "Brak próśb o zgodę.", denied: "Odmowy w trybie auto: ",
+    sTools: "Narzędzia", hTool: "narzędzie", hCalls: "wywołania", hErrors: "błędy", hErrorRate: "% błędów",
+    hAvgTime: "śr. czas", hAllTime: "łącznie", hPerms: "zgody", noTools: "Brak danych o narzędziach.",
+    sErrors: "Błędy", noErrors: "Bez błędów.", sCompactions: "Kompaktowania", noCompactions: "Brak kompaktowań.",
+    sSubagents: "Podagenci i zadania", noSubagents: "Brak podagentów.",
+    todoLists: (c, d) => "Listy zadań: utworzone " + c + ", ukończone " + d, interruptions: "Przerwania: ",
+    sSessions: "Sesje", sessionsNote: "najdłużej czekające na Ciebie najpierw", noProject: "bez projektu",
+    hSession: "sesja", hFrom: "od", hWork: "praca", hWaiting: "czeka", hPrompts: "polecenia", hLongest: "najdłużej",
+    hState: "stan", shown: (n, all) => "Pokazano " + n + " z " + all + "; pełna lista w JSON.",
+    missing: list => "Brak w danych: " + list + ". Te liczby są zerowe.",
+    limits: (i, w, l, tz) => "Limity: pojedynczy odcinek liczony najwyżej " + i + ", praca bez zdarzeń najwyżej " + w +
+      "; czas reakcji to epizody do " + l + ". Czas lokalny: " + tz + ".",
+  },
+  en: {
+    title: "Agent statistics", agentsBack: "← agents", back: "Back to the session list", statistics: "Statistics",
+    period: "Period", oneDay: " day", nDays: " days", data: "Data",
+    reportTitle: "Markdown report for an AI agent", reportLong: "report for AI", reportShort: "AI report",
+    eventsTitle: "Raw events (JSON lines)", eventsLong: "events", eventsShort: "events", jsonTitle: "Statistics as JSON",
+    themeDark: "Dark theme. Click to switch to light", themeLight: "Light theme. Click to switch to dark",
+    toLight: "Switch to the light theme", toDark: "Switch to the dark theme",
+    langTitle: "Language: English. Click to switch to Polish", langAria: "Language: English. Switch to Polish",
+    "cause.permission": "permission", "cause.question": "question", "cause.plan": "plan", "cause.decision": "decision",
+    "cause.session_offer": "session offer", "cause.other": "other",
+    "state.working": "working", "state.waiting": "waiting", "state.idle": "ready", "state.error": "error", "state.ended": "ended",
+    loadFailed: m => "Could not load the statistics: " + m,
+    tapBar: "Tap a bar to see the details.",
+    work: d => "work " + d, waitingForYou: d => "waiting for you " + d, waitingShort: d => "waiting " + d,
+    anyWaiting: (d, a) => "≥1 waiting " + d + " of " + a + " active", avgWorking: n => "on average " + n + " working",
+    medianResponse: d => "median response " + d,
+    nPrompts: (n, s) => s + " " + p2(n, "prompt", "prompts"),
+    nPermissions: (n, s) => s + " " + p2(n, "permission", "permissions"),
+    nSessions: (n, s) => s + " " + p2(n, "session", "sessions"),
+    nEvents: (n, s) => s + " " + p2(n, "event", "events"),
+    nTurns: (n, s) => s + " " + p2(n, "turn", "turns"),
+    nTimes: (n, s) => s + " " + p2(n, "time", "times"),
+    nPatterns: (n, s) => s + " " + p2(n, "pattern", "patterns"),
+    nInterruptions: (n, s) => s + " " + p2(n, "interruption", "interruptions"),
+    nOver4h: (n, s) => s + " " + p2(n, "episode", "episodes") + " over 4 h left out",
+    noData: "No data.", none: "None.",
+    noEvents: "No events in this period. Statistics are collected from the moment the archive is turned on.",
+    tWork: "Agent work", tWaiting: "Waiting for you", tWaitingNote: p => p + " of active session time",
+    tResponse: "Your response time", tResponseNote: (p90, times) => "median · p90 " + p90 + " · " + times,
+    tPermissions: "Permission requests", tPrompts: "Prompts", tPromptsNote: d => "next one after " + d + " (median)",
+    tParallel: "In parallel", tParallelNote: m => "working on average · max " + m,
+    tSomeoneWaits: "Someone waiting", tSomeoneWaitsNote: n => "of active time · 2+ at once: " + n + "×",
+    tErrors: "Errors · compactions",
+    lgWork: "work", lgWaiting: "waiting for you",
+    sHours: "Time of day", sumPeriod: "total over the whole period", sDays: "Days", sWeekdays: "Weekdays",
+    sCauses: "What sessions wait for", upTo4h: "episodes up to 4 h",
+    hCause: "cause", hTimes: "times", hMedian: "median", hP90: "p90", hTotal: "total",
+    stillWaiting: n => n + " still waiting",
+    sParallel: "Parallelism", hMeasure: "measure", hValue: "value",
+    pAvg: "working on average (while anything works)", pMaxWorking: "max working at once",
+    pMaxWaiting: "max waiting at once", pActive: "anything working or waiting", pAny: "≥1 waiting for you",
+    pMulti: "≥2 waiting at once",
+    sMachines: "Machines", sProjects: "Projects",
+    sPerms: "Repeated permission requests", permsNote: "candidates for the allowlist",
+    hPattern: "pattern", hSessions: "sessions", hProjects: "projects", hMedianResponse: "median response",
+    hWaitTotal: "total waiting", noPerms: "No permission requests.", denied: "Refused in auto mode: ",
+    sTools: "Tools", hTool: "tool", hCalls: "calls", hErrors: "errors", hErrorRate: "% errors",
+    hAvgTime: "avg time", hAllTime: "total", hPerms: "permissions", noTools: "No tool data.",
+    sErrors: "Errors", noErrors: "No errors.", sCompactions: "Compactions", noCompactions: "No compactions.",
+    sSubagents: "Subagents and tasks", noSubagents: "No subagents.",
+    todoLists: (c, d) => "Task lists: " + c + " created, " + d + " completed", interruptions: "Interruptions: ",
+    sSessions: "Sessions", sessionsNote: "longest waiting for you first", noProject: "no project",
+    hSession: "session", hFrom: "started", hWork: "work", hWaiting: "waiting", hPrompts: "prompts", hLongest: "longest",
+    hState: "state", shown: (n, all) => "Showing " + n + " of " + all + "; the full list is in the JSON.",
+    missing: list => "Missing from the data: " + list + ". These numbers are zero.",
+    limits: (i, w, l, tz) => "Limits: a single interval counts for at most " + i + ", work without events for at most " + w +
+      "; response time covers episodes up to " + l + ". Local time: " + tz + ".",
+  },
+};
+// t("key", ...args): the text in the current language (a function entry gets the args).
+function t(key, ...args) {
+  const v = TEXT[lang][key] ?? TEXT.pl[key];
+  return typeof v === "function" ? v(...args) : v ?? key;
+}
+// Fixed Polish parts of what the server sends, for English display only. The server keeps
+// them Polish (the statistics match on them); free text after a prefix stays as it is.
+const SERVER_EN = [
+  ["zgoda: ", "permission: "], ["pytanie: ", "question: "], ["pytanie", "question"],
+  ["decyzja: ", "decision: "], ["odmowa: ", "denied: "], ["błąd narzędzia: ", "tool error: "],
+  ["błąd: limit zapytań", "error: rate limit"], ["błąd: przeciążenie API", "error: API overloaded"],
+  ["błąd: błąd logowania", "error: authentication failed"], ["błąd: płatności", "error: billing"],
+  ["błąd: błąd serwera API", "error: API server error"], ["błąd: za długa odpowiedź", "error: response too long"],
+  ["błąd: ", "error: "], ["podagent: ", "subagent: "], ["podagent ", "subagent "], ["podagent", "subagent"],
+  ["propozycja sesji: ", "session offer: "], ["propozycja sesji", "session offer"],
+  ["plan do akceptacji", "plan awaiting approval"], ["zrobione: ", "done: "],
+  ["przerwane przez Ciebie", "interrupted by you"], ["przerwane: zamknięcie OpenCode", "interrupted: OpenCode shut down"],
+  ["przerwane: nowe polecenie", "interrupted: new prompt"], ["przerwane: brak aktywności", "interrupted: inactivity"],
+  ["przerwane: ", "interrupted: "], ["przerwane", "interrupted"],
+  ["narzędzie: ", "tool: "], ["narzędzie", "tool"],
+  ["(bez projektu)", "(no project)"], ["(bez opisu)", "(no description)"], ["(bez powodu)", "(no reason)"],
+  ["(bez typu)", "(no type)"], ["(nieznane)", "(unknown)"], ["(nieznany)", "(unknown)"], ["(inne)", "(other)"],
+  ["PostToolUse/PostToolUseFailure (czasy i błędy narzędzi)", "PostToolUse/PostToolUseFailure (tool times and errors)"],
+  ["PreToolUse (liczba wywołań narzędzi)", "PreToolUse (number of tool calls)"],
+  ["PreCompact/PostCompact (kompaktowania)", "PreCompact/PostCompact (compactions)"],
+  ["SubagentStart (podagenci)", "SubagentStart (subagents)"],
+  ["TaskCreated/TaskCompleted (listy zadań)", "TaskCreated/TaskCompleted (task lists)"],
+  ["archiwum zdarzeń jest wyłączone (serwer uruchomiony z -archive \"\" albo bez pliku -state); statystyki są niedostępne",
+    "the event archive is off (the server runs with -archive \"\" or without a -state file); statistics are unavailable"],
+].sort((a, b) => b[0].length - a[0].length);
+function srv(s) {
+  if (lang === "pl" || !s) return s;
+  for (const [pl, en] of SERVER_EN) {
+    // A whole word only: "podagent" must not turn "podagenty skończyły" into English halves.
+    if (s.startsWith(pl) && (s.length === pl.length || /[\s:)]$/.test(pl) || /^[\s:(—,]/.test(s.slice(pl.length)))) {
+      return en + s.slice(pl.length);
+    }
+  }
+  return s;
+}
+// byWeekday keys, Monday first.
+const WEEKDAY_EN = { pon: "Mon", wt: "Tue", "śr": "Wed", czw: "Thu", pt: "Fri", sob: "Sat", ndz: "Sun" };
+const weekday = k => lang === "en" ? WEEKDAY_EN[k] || k : k;
+const locale = () => lang === "en" ? "en-GB" : "pl-PL";
+// Texts written into the page's own markup: data-t (text), data-t-title, data-t-aria.
+function applyStatic() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  for (const e of document.querySelectorAll("[data-t]")) e.textContent = t(e.dataset.t);
+  for (const e of document.querySelectorAll("[data-t-title]")) e.title = t(e.dataset.tTitle);
+  for (const e of document.querySelectorAll("[data-t-aria]")) e.setAttribute("aria-label", t(e.dataset.tAria));
+}
+
 // Dark or light, the same switch as on the status page (shared through localStorage).
 const themeBtn = document.getElementById("theme");
 function showTheme() {
   const dark = document.documentElement.dataset.theme !== "light";
-  themeBtn.title = dark ? "Ciemny motyw. Kliknij, aby przełączyć na jasny" : "Jasny motyw. Kliknij, aby przełączyć na ciemny";
-  themeBtn.setAttribute("aria-label", dark ? "Przełącz na jasny motyw" : "Przełącz na ciemny motyw");
+  themeBtn.title = t(dark ? "themeDark" : "themeLight");
+  themeBtn.setAttribute("aria-label", t(dark ? "toLight" : "toDark"));
 }
 themeBtn.addEventListener("click", () => {
   const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
@@ -175,20 +367,34 @@ themeBtn.addEventListener("click", () => {
 });
 showTheme();
 
-const CAUSE = { permission: "zgoda", question: "pytanie", plan: "plan", decision: "decyzja", session_offer: "propozycja sesji", other: "inne" };
-const STATE = { working: "pracuje", waiting: "czeka", idle: "gotowy", error: "błąd", ended: "zakończona" };
+// The language button shows the language in use; a tap switches and redraws at once.
+const langBtn = document.getElementById("lang");
+function showLang() {
+  langBtn.textContent = lang.toUpperCase();
+  langBtn.title = t("langTitle");
+  langBtn.setAttribute("aria-label", t("langAria"));
+}
+langBtn.addEventListener("click", () => {
+  lang = lang === "pl" ? "en" : "pl";
+  try { localStorage.setItem("lang", lang); } catch {}
+  applyStatic();
+  showLang();
+  showTheme();
+  if (lastStats) render(lastStats);
+  if (lastError != null) showError(lastError);
+});
+applyStatic();
+showLang();
+
 const AGENT = { claude: "Claude Code", opencode: "OpenCode" };
+const CAUSE = c => TEXT.pl["cause." + c] ? t("cause." + c) : c;
+const STATE = s => TEXT.pl["state." + s] ? t("state." + s) : s;
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
   if (text != null) e.textContent = text;
   return e;
-}
-function plural(n, one, few, many) {
-  if (n === 1) return one;
-  const d = n % 10, dd = n % 100;
-  return d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
 }
 function dur(sec) {
   sec = Math.round(sec || 0);
@@ -198,8 +404,10 @@ function dur(sec) {
   return (sec / 3600).toFixed(0) + " h";
 }
 const pct = f => Math.round((f || 0) * 100) + "%";
-const num = n => (n || 0).toLocaleString("pl-PL");
-const dt = iso => new Date(iso).toLocaleString("pl-PL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const num = n => (n || 0).toLocaleString(locale());
+const dt = iso => new Date(iso).toLocaleString(locale(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+// "1 234 sesje" / "1,234 sessions": the number formatted for the language, the noun by its form rules.
+const count = (key, n) => t(key, n || 0, num(n));
 
 let days = 7;
 try { const d = +localStorage.getItem("statsDays"); if ([1, 7, 30].includes(d)) days = d; } catch {}
@@ -216,6 +424,13 @@ function setDays(d) {
 for (const b of document.querySelectorAll("[data-days]")) b.addEventListener("click", () => setDays(+b.dataset.days));
 
 let seq = 0;
+let lastStats = null;   // the last payload, drawn again when the language changes
+let lastError = null;   // the last load error, likewise
+function showError(msg) {
+  const off = document.getElementById("offline");
+  off.hidden = false;
+  off.textContent = t("loadFailed", srv(msg));
+}
 async function load() {
   const my = ++seq;
   const off = document.getElementById("offline");
@@ -226,11 +441,13 @@ async function load() {
     const st = await r.json();
     if (my !== seq) return;
     off.hidden = true;
+    lastStats = st;
+    lastError = null;
     render(st);
   } catch (e) {
     if (my !== seq) return;
-    off.hidden = false;
-    off.textContent = "Nie udało się pobrać statystyk: " + e.message;
+    lastError = e.message;
+    showError(e.message);
   }
 }
 
@@ -244,10 +461,10 @@ function section(title, note) {
 }
 
 function tile(k, v, n, cls) {
-  const t = el("div", "tile" + (cls ? " " + cls : ""));
-  t.append(el("div", "k", k), el("div", "v", v));
-  if (n) t.append(el("div", "n", n));
-  return t;
+  const box = el("div", "tile" + (cls ? " " + cls : ""));
+  box.append(el("div", "k", k), el("div", "v", v));
+  if (n) box.append(el("div", "n", n));
+  return box;
 }
 
 function legend(items) {
@@ -278,7 +495,7 @@ function columns(groups, label, describe) {
     cols.append(b);
     axis.append(el("span", null, i % every === 0 ? label(g) : ""));
   });
-  pick.append(el("span", "muted", "Dotknij słupka, by zobaczyć szczegóły."));
+  pick.append(el("span", "muted", t("tapBar")));
   wrap.append(cols, axis, pick);
   return wrap;
 }
@@ -287,13 +504,13 @@ function describeTime(title) {
   return g => {
     const b = el("b", null, title(g) + ": ");
     const parts = [
-      "praca " + dur(g.workingSec), "czekanie na Ciebie " + dur(g.waitingSec),
-      "≥1 czeka " + dur(g.anyWaitingSec) + " z " + dur(g.activeSec) + " aktywnych",
-      "średnio " + (g.avgWorking || 0).toFixed(2) + " pracujących",
-      num(g.prompts) + " " + plural(g.prompts, "polecenie", "polecenia", "poleceń"),
-      num(g.permissions) + " " + plural(g.permissions, "zgoda", "zgody", "zgód"),
+      t("work", dur(g.workingSec)), t("waitingForYou", dur(g.waitingSec)),
+      t("anyWaiting", dur(g.anyWaitingSec), dur(g.activeSec)),
+      t("avgWorking", (g.avgWorking || 0).toFixed(2)),
+      count("nPrompts", g.prompts),
+      count("nPermissions", g.permissions),
     ];
-    if (g.waits.count) parts.push("mediana reakcji " + dur(g.waits.medianSec) + " (n=" + g.waits.count + ")");
+    if (g.waits.count) parts.push(t("medianResponse", dur(g.waits.medianSec)) + " (n=" + g.waits.count + ")");
     return [b, document.createTextNode(parts.join(" · "))];
   };
 }
@@ -304,28 +521,30 @@ function hbars(groups, limit) {
   const max = Math.max(1, ...list.map(g => g.workingSec + g.waitingSec));
   for (const g of list) {
     const row = el("div", "hbar");
-    const name = el("span", "name", g.label ? g.label : g.key);
-    name.title = g.label ? g.label + " (" + g.key + ")" : g.key;
+    const key = srv(g.key);
+    const name = el("span", "name", g.label ? g.label : key);
+    name.title = g.label ? g.label + " (" + key + ")" : key;
     const track = el("span", "track");
     const w = el("i", "s-working"), q = el("i", "s-waiting");
     w.style.width = (g.workingSec / max * 100) + "%";
     q.style.width = (g.waitingSec / max * 100) + "%";
     track.append(w, q);
-    const val = el("span", "val", "praca " + dur(g.workingSec) + " · czeka " + dur(g.waitingSec) + " (" + pct(g.waitShare) + ") · "
-      + g.sessions + " " + plural(g.sessions, "sesja", "sesje", "sesji") + " · " + num(g.permissions) + " " + plural(g.permissions, "zgoda", "zgody", "zgód")
-      + (g.waits.count ? " · mediana reakcji " + dur(g.waits.medianSec) : ""));
+    const val = el("span", "val", t("work", dur(g.workingSec)) + " · " + t("waitingShort", dur(g.waitingSec)) + " (" + pct(g.waitShare) + ") · "
+      + count("nSessions", g.sessions) + " · " + count("nPermissions", g.permissions)
+      + (g.waits.count ? " · " + t("medianResponse", dur(g.waits.medianSec)) : ""));
     row.append(name, track, val);
     box.append(row);
   }
-  if (!list.length) box.append(el("div", "muted", "Brak danych."));
+  if (!list.length) box.append(el("div", "muted", t("noData")));
   return box;
 }
 
+// head: [text key, numeric column?] per column.
 function table(head, rows) {
   const wrap = el("div", "scroll");
-  const t = el("table");
+  const tbl = el("table");
   const tr = el("tr");
-  for (const [label, isNum] of head) tr.append(el("th", isNum ? "num" : null, label));
+  for (const [label, isNum] of head) tr.append(el("th", isNum ? "num" : null, t(label)));
   const thead = el("thead"); thead.append(tr);
   const tbody = el("tbody");
   for (const cells of rows) {
@@ -337,81 +556,81 @@ function table(head, rows) {
     });
     tbody.append(r);
   }
-  t.append(thead, tbody);
-  wrap.append(t);
+  tbl.append(thead, tbody);
+  wrap.append(tbl);
   return wrap;
 }
 
 function countList(items, empty) {
-  if (!items || !items.length) return el("div", "muted", empty || "Brak.");
+  if (!items || !items.length) return el("div", "muted", t(empty || "none"));
   const ul = el("ul", "plain");
-  for (const c of items) { const li = el("li"); li.append(el("span", null, c.key), el("span", null, num(c.count))); ul.append(li); }
+  for (const c of items) { const li = el("li"); li.append(el("span", null, srv(c.key)), el("span", null, num(c.count))); ul.append(li); }
   return ul;
 }
 
 function render(st) {
   const main = document.getElementById("main");
-  const t = st.totals, lat = st.latency, par = st.parallelism;
-  document.getElementById("sub").textContent = dt(st.period.from) + " – " + dt(st.period.to) + " · "
-    + num(st.coverage.records) + " " + plural(st.coverage.records, "zdarzenie", "zdarzenia", "zdarzeń");
+  const tot = st.totals, lat = st.latency, par = st.parallelism;
+  document.getElementById("sub").textContent = dt(st.period.from) + " – " + dt(st.period.to) + " · " + count("nEvents", st.coverage.records);
   const out = [];
   if (!st.coverage.records) {
-    main.replaceChildren(el("div", "empty", "Brak zdarzeń w tym okresie. Statystyki zbierają się od chwili włączenia archiwum."));
+    main.replaceChildren(el("div", "empty", t("noEvents")));
     return;
   }
 
   const tiles = el("div", "tiles");
   tiles.append(
-    tile("Praca agentów", dur(t.workingSec), t.sessions + " " + plural(t.sessions, "sesja", "sesje", "sesji") + " · " + num(t.turns) + " " + plural(t.turns, "tura", "tury", "tur"), "ok"),
-    tile("Czekanie na Ciebie", dur(t.waitingSec), pct(t.waitShare) + " aktywnego czasu sesji", "signal"),
-    tile("Twój czas reakcji", lat.all.count ? dur(lat.all.medianSec) : "–", "mediana · p90 " + dur(lat.all.p90Sec) + " · " + num(lat.all.count) + " " + plural(lat.all.count, "raz", "razy", "razy")),
-    tile("Prośby o zgodę", num(t.permissions), st.permissions.byPattern.length + " " + plural(st.permissions.byPattern.length, "wzorzec", "wzorce", "wzorców")),
-    tile("Polecenia", num(t.prompts), st.nextPrompt.count ? "kolejne po " + dur(st.nextPrompt.medianSec) + " (mediana)" : ""),
-    tile("Równolegle", (par.avgWorkingWhenActive || 0).toFixed(1), "średnio pracujących · maks. " + par.maxWorking),
-    tile("Ktoś czeka", pct(par.anyWaitingShareOfActive), "czasu aktywnego · 2+ naraz: " + par.multiWaitingEvents + "×", par.anyWaitingShareOfActive > 0.3 ? "signal" : ""),
-    tile("Błędy · kompaktowania", t.errors + " · " + st.compactions.total, t.interruptions ? t.interruptions + " " + plural(t.interruptions, "przerwanie", "przerwania", "przerwań") : "", t.errors ? "warn" : ""),
+    tile(t("tWork"), dur(tot.workingSec), count("nSessions", tot.sessions) + " · " + count("nTurns", tot.turns), "ok"),
+    tile(t("tWaiting"), dur(tot.waitingSec), t("tWaitingNote", pct(tot.waitShare)), "signal"),
+    tile(t("tResponse"), lat.all.count ? dur(lat.all.medianSec) : "–", t("tResponseNote", dur(lat.all.p90Sec), count("nTimes", lat.all.count))),
+    tile(t("tPermissions"), num(tot.permissions), count("nPatterns", st.permissions.byPattern.length)),
+    tile(t("tPrompts"), num(tot.prompts), st.nextPrompt.count ? t("tPromptsNote", dur(st.nextPrompt.medianSec)) : ""),
+    tile(t("tParallel"), (par.avgWorkingWhenActive || 0).toFixed(1), t("tParallelNote", par.maxWorking)),
+    tile(t("tSomeoneWaits"), pct(par.anyWaitingShareOfActive), t("tSomeoneWaitsNote", par.multiWaitingEvents), par.anyWaitingShareOfActive > 0.3 ? "signal" : ""),
+    tile(t("tErrors"), tot.errors + " · " + st.compactions.total, tot.interruptions ? count("nInterruptions", tot.interruptions) : "", tot.errors ? "warn" : ""),
   );
   out.push(tiles);
 
-  const lg = legend([["s-working", "praca"], ["s-waiting", "czeka na Ciebie"]]);
+  const lg = legend([["s-working", t("lgWork")], ["s-waiting", t("lgWaiting")]]);
   const grid1 = el("div", "grid");
   {
-    const [s, b] = section("Pora dnia", "suma z całego okresu");
+    const [s, b] = section(t("sHours"), t("sumPeriod"));
     b.append(lg.cloneNode(true), columns(st.byHour, g => g.key, describeTime(g => g.key + ":00")));
     grid1.append(s);
   }
   if (st.byDay.length > 1) {
-    const [s, b] = section("Dni");
-    b.append(lg.cloneNode(true), columns(st.byDay, g => g.key.slice(8) + "." + g.key.slice(5, 7), describeTime(g => g.key)));
+    const [s, b] = section(t("sDays"));
+    const sep = lang === "en" ? "/" : ".";   // 24.11 / 24/11
+    b.append(lg.cloneNode(true), columns(st.byDay, g => g.key.slice(8) + sep + g.key.slice(5, 7), describeTime(g => g.key)));
     grid1.append(s);
   }
   if (st.period.days >= 7) {
-    const [s, b] = section("Dni tygodnia", "suma z całego okresu");
-    b.append(lg.cloneNode(true), columns(st.byWeekday, g => g.key, describeTime(g => g.key)));
+    const [s, b] = section(t("sWeekdays"), t("sumPeriod"));
+    b.append(lg.cloneNode(true), columns(st.byWeekday, g => weekday(g.key), describeTime(g => weekday(g.key))));
     grid1.append(s);
   }
   out.push(grid1);
 
   const grid2 = el("div", "grid");
   {
-    const [s, b] = section("Na co czekają sesje", "epizody do 4 h");
-    b.append(table([["przyczyna"], ["razy", 1], ["mediana", 1], ["p90", 1], ["suma", 1]],
-      lat.byCause.filter(c => c.count).map(c => [CAUSE[c.cause] || c.cause, num(c.count), dur(c.medianSec), dur(c.p90Sec), dur(c.totalSec)])));
+    const [s, b] = section(t("sCauses"), t("upTo4h"));
+    b.append(table([["hCause"], ["hTimes", 1], ["hMedian", 1], ["hP90", 1], ["hTotal", 1]],
+      lat.byCause.filter(c => c.count).map(c => [CAUSE(c.cause), num(c.count), dur(c.medianSec), dur(c.p90Sec), dur(c.totalSec)])));
     const notes = [];
-    if (lat.over4h) notes.push(lat.over4h + " " + plural(lat.over4h, "epizod", "epizody", "epizodów") + " ponad 4 h pominięto");
-    if (lat.openAtEnd) notes.push(lat.openAtEnd + " nadal czeka");
+    if (lat.over4h) notes.push(count("nOver4h", lat.over4h));
+    if (lat.openAtEnd) notes.push(t("stillWaiting", lat.openAtEnd));
     if (notes.length) b.append(el("p", "note", notes.join(" · ")));
     grid2.append(s);
   }
   {
-    const [s, b] = section("Równoległość");
-    b.append(table([["miara"], ["wartość", 1]], [
-      ["średnio pracujących (gdy coś pracuje)", (par.avgWorkingWhenActive || 0).toFixed(2)],
-      ["maks. pracujących naraz", par.maxWorking + (par.maxWorkingAt ? " · " + dt(par.maxWorkingAt) : "")],
-      ["maks. czekających naraz", par.maxWaiting + (par.maxWaitingAt ? " · " + dt(par.maxWaitingAt) : "")],
-      ["coś pracuje lub czeka", dur(par.activeSec)],
-      ["≥1 czeka na Ciebie", dur(par.anyWaitingSec) + " (" + pct(par.anyWaitingShareOfActive) + ")"],
-      ["≥2 czekają naraz", dur(par.multiWaitingSec) + " (" + par.multiWaitingEvents + "×)"],
+    const [s, b] = section(t("sParallel"));
+    b.append(table([["hMeasure"], ["hValue", 1]], [
+      [t("pAvg"), (par.avgWorkingWhenActive || 0).toFixed(2)],
+      [t("pMaxWorking"), par.maxWorking + (par.maxWorkingAt ? " · " + dt(par.maxWorkingAt) : "")],
+      [t("pMaxWaiting"), par.maxWaiting + (par.maxWaitingAt ? " · " + dt(par.maxWaitingAt) : "")],
+      [t("pActive"), dur(par.activeSec)],
+      [t("pAny"), dur(par.anyWaitingSec) + " (" + pct(par.anyWaitingShareOfActive) + ")"],
+      [t("pMulti"), dur(par.multiWaitingSec) + " (" + par.multiWaitingEvents + "×)"],
     ]));
     grid2.append(s);
   }
@@ -419,78 +638,77 @@ function render(st) {
 
   const grid3 = el("div", "grid");
   {
-    const [s, b] = section("Maszyny");
+    const [s, b] = section(t("sMachines"));
     b.append(hbars(st.byHost, 12));
     grid3.append(s);
   }
   {
-    const [s, b] = section("Projekty");
+    const [s, b] = section(t("sProjects"));
     b.append(hbars(st.byProject, 12));
     grid3.append(s);
   }
   out.push(grid3);
 
   {
-    const [s, b] = section("Powtarzające się prośby o zgodę", "kandydaci do allowlisty");
+    const [s, b] = section(t("sPerms"), t("permsNote"));
     const rows = st.permissions.byPattern.slice(0, 20).map(p => {
       const c = el("span");
-      c.append(el("code", null, p.pattern), el("span", "ex", p.example));
+      c.append(el("code", null, srv(p.pattern)), el("span", "ex", srv(p.example)));
       return [c, num(p.count), String(p.sessions), String(p.projects), p.waits.count ? dur(p.waits.medianSec) : "–", dur(p.waits.totalSec)];
     });
-    if (rows.length) b.append(table([["wzorzec"], ["razy", 1], ["sesje", 1], ["projekty", 1], ["mediana reakcji", 1], ["suma czekania", 1]], rows));
-    else b.append(el("div", "muted", "Brak próśb o zgodę."));
-    if (st.permissions.denied.length) b.append(el("p", "note", "Odmowy w trybie auto: " + (st.permissions.deniedDetails || st.permissions.denied).map(c => c.key + " ×" + c.count).join(", ")));
+    if (rows.length) b.append(table([["hPattern"], ["hTimes", 1], ["hSessions", 1], ["hProjects", 1], ["hMedianResponse", 1], ["hWaitTotal", 1]], rows));
+    else b.append(el("div", "muted", t("noPerms")));
+    if (st.permissions.denied.length) b.append(el("p", "note", t("denied") + (st.permissions.deniedDetails || st.permissions.denied).map(c => srv(c.key) + " ×" + c.count).join(", ")));
     out.push(s);
   }
 
   {
-    const [s, b] = section("Narzędzia");
-    const rows = st.tools.slice(0, 20).map(x => [x.agent ? x.tool + " · " + x.agent : x.tool, num(x.calls), num(x.failures), x.failures ? pct(x.failureRate) : "–",
+    const [s, b] = section(t("sTools"));
+    const rows = st.tools.slice(0, 20).map(x => [x.agent ? srv(x.tool) + " · " + x.agent : srv(x.tool), num(x.calls), num(x.failures), x.failures ? pct(x.failureRate) : "–",
       x.timed ? dur(x.avgMs / 1000) : "–", x.timed ? dur(x.totalMs / 1000) : "–", num(x.permissions)]);
-    if (rows.length) b.append(table([["narzędzie"], ["wywołania", 1], ["błędy", 1], ["% błędów", 1], ["śr. czas", 1], ["łącznie", 1], ["zgody", 1]], rows));
-    else b.append(el("div", "muted", "Brak danych o narzędziach."));
+    if (rows.length) b.append(table([["hTool"], ["hCalls", 1], ["hErrors", 1], ["hErrorRate", 1], ["hAvgTime", 1], ["hAllTime", 1], ["hPerms", 1]], rows));
+    else b.append(el("div", "muted", t("noTools")));
     out.push(s);
   }
 
   const grid4 = el("div", "grid");
   {
-    const [s, b] = section("Błędy");
-    b.append(countList(st.errors, "Bez błędów."));
+    const [s, b] = section(t("sErrors"));
+    b.append(countList(st.errors, "noErrors"));
     grid4.append(s);
   }
   {
-    const [s, b] = section("Kompaktowania", st.compactions.total ? String(st.compactions.total) : "");
-    b.append(countList(st.compactions.byProject, "Brak kompaktowań."));
-    if (st.compactions.byTrigger.length) b.append(el("p", "note", st.compactions.byTrigger.map(c => c.key + " " + c.count).join(", ")));
+    const [s, b] = section(t("sCompactions"), st.compactions.total ? String(st.compactions.total) : "");
+    b.append(countList(st.compactions.byProject, "noCompactions"));
+    if (st.compactions.byTrigger.length) b.append(el("p", "note", st.compactions.byTrigger.map(c => srv(c.key) + " " + c.count).join(", ")));
     grid4.append(s);
   }
   {
-    const [s, b] = section("Podagenci i zadania");
-    b.append(countList(st.subagents, "Brak podagentów."));
-    b.append(el("p", "note", "Listy zadań: utworzone " + st.todos.created + ", ukończone " + st.todos.completed));
-    if (st.interruptions.length) b.append(el("p", "note", "Przerwania: " + st.interruptions.map(c => c.key + " " + c.count).join(", ")));
+    const [s, b] = section(t("sSubagents"));
+    b.append(countList(st.subagents, "noSubagents"));
+    b.append(el("p", "note", t("todoLists", st.todos.created, st.todos.completed)));
+    if (st.interruptions.length) b.append(el("p", "note", t("interruptions") + st.interruptions.map(c => srv(c.key) + " " + c.count).join(", ")));
     grid4.append(s);
   }
   out.push(grid4);
 
   {
-    const [s, b] = section("Sesje", "najdłużej czekające na Ciebie najpierw");
+    const [s, b] = section(t("sSessions"), t("sessionsNote"));
     const rows = [...st.sessions].sort((a, z) => z.waitingSec - a.waitingSec || z.workingSec - a.workingSec).slice(0, 40).map(r => {
       const who = el("span");
-      who.append(el("span", null, (r.project || "bez projektu") + " · " + (r.hostLabel || r.host)),
+      who.append(el("span", null, (r.project || t("noProject")) + " · " + (r.hostLabel || r.host)),
         el("span", "ex", (AGENT[r.agent] || r.agent) + (r.model ? " · " + r.model : "") + (r.title ? " · " + r.title : "")));
-      return [who, dt(r.start), dur(r.workingSec), dur(r.waitingSec), String(r.prompts), String(r.permissions), r.longestWaitSec ? dur(r.longestWaitSec) : "–", String(r.errors), STATE[r.lastState] || r.lastState];
+      return [who, dt(r.start), dur(r.workingSec), dur(r.waitingSec), String(r.prompts), String(r.permissions), r.longestWaitSec ? dur(r.longestWaitSec) : "–", String(r.errors), STATE(r.lastState)];
     });
-    b.append(table([["sesja"], ["od"], ["praca", 1], ["czeka", 1], ["polecenia", 1], ["zgody", 1], ["najdłużej", 1], ["błędy", 1], ["stan"]], rows));
-    if (st.sessions.length > 40) b.append(el("p", "note", "Pokazano 40 z " + st.sessions.length + "; pełna lista w JSON."));
+    b.append(table([["hSession"], ["hFrom"], ["hWork", 1], ["hWaiting", 1], ["hPrompts", 1], ["hPerms", 1], ["hLongest", 1], ["hErrors", 1], ["hState"]], rows));
+    if (st.sessions.length > 40) b.append(el("p", "note", t("shown", 40, st.sessions.length)));
     out.push(s);
   }
 
   if (st.coverage.missing && st.coverage.missing.length) {
-    out.push(el("p", "note", "Brak w danych: " + st.coverage.missing.join("; ") + ". Te liczby są zerowe."));
+    out.push(el("p", "note", t("missing", st.coverage.missing.map(srv).join("; "))));
   }
-  out.push(el("p", "note", "Limity: pojedynczy odcinek liczony najwyżej " + dur(st.caps.intervalMaxSec) + ", praca bez zdarzeń najwyżej "
-    + dur(st.caps.workingSilenceMaxSec) + "; czas reakcji to epizody do " + dur(st.caps.latencyMaxSec) + ". Czas lokalny: " + st.period.tz + "."));
+  out.push(el("p", "note", t("limits", dur(st.caps.intervalMaxSec), dur(st.caps.workingSilenceMaxSec), dur(st.caps.latencyMaxSec), st.period.tz)));
   main.replaceChildren(...out);
 }
 

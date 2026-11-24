@@ -44,7 +44,7 @@ $Events = "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
 # hooks on SessionStart.
 $Retired = @("SessionStart")
 
-if (-not $Uninstall -and -not $Server) { throw "Podaj adres serwera: -Server 192.168.1.10 (albo host:port)" }
+if (-not $Uninstall -and -not $Server) { throw "Give the server address: -Server 192.168.1.10 (or host:port)" }
 if ($Server) {
     if ($Server -notmatch '^https?://') { $Server = "http://$Server" }
     $Server = $Server.TrimEnd('/')
@@ -89,15 +89,15 @@ function Install-Claude {
     if (-not $SkipStatusline) { Update-Statusline $settings }
     $json = ConvertTo-Json -InputObject $settings -Depth 50
     [IO.File]::WriteAllText($path, $json, (New-Object Text.UTF8Encoding $false))
-    if ($Uninstall) { Write-Host "Claude Code: usunieto hooki z $path" }
-    else { Write-Host "Claude Code: hooki dopisane do $path (kopia: settings.json.bak)" }
+    if ($Uninstall) { Write-Host "Claude Code: hooks removed from $path" }
+    else { Write-Host "Claude Code: hooks added to $path (backup: settings.json.bak)" }
 }
 
 function Install-OpenCode {
     $dir = Join-Path $HOME ".config\opencode\plugins"
     $path = Join-Path $dir "agent-status.ts"
     if ($Uninstall) {
-        if (Test-Path $path) { Remove-Item $path; Write-Host "OpenCode: usunieto $path" }
+        if (Test-Path $path) { Remove-Item $path; Write-Host "OpenCode: removed $path" }
         return
     }
     New-Item -ItemType Directory -Force $dir | Out-Null
@@ -106,7 +106,7 @@ function Install-OpenCode {
     $src = $src.Replace('"http://SERVER:7777"', "`"$Server`"")
     $src = $src.Replace('process.env.AGENT_STATUS_HOST ?? hostname()', "process.env.AGENT_STATUS_HOST ?? $(ConvertTo-Json $Name)")
     [IO.File]::WriteAllText($path, $src, (New-Object Text.UTF8Encoding $false))
-    Write-Host "OpenCode: plugin zapisany w $path"
+    Write-Host "OpenCode: plugin written to $path"
 }
 
 $SkillName = "agent-flow-review"
@@ -159,9 +159,9 @@ function Update-Statusline($settings) {
             $settings.PSObject.Properties.Remove("statusLine")
             if (Test-Path $orig) {
                 $settings | Add-Member -NotePropertyName statusLine -NotePropertyValue ([IO.File]::ReadAllText($orig, $utf8) | ConvertFrom-Json)
-                Write-Host "Statusline: przywrocono Twoj poprzedni statusLine"
+                Write-Host "Statusline: your previous statusLine restored"
             } else {
-                Write-Host "Statusline: usunieto"
+                Write-Host "Statusline: removed"
             }
         }
         # Someone else's statusLine (changed after installing) is left as it is.
@@ -197,10 +197,10 @@ function Update-Statusline($settings) {
             foreach ($p in $next, $orig) { if (Test-Path $p) { Remove-Item $p } }
             $settings | Add-Member -NotePropertyName statusLine -NotePropertyValue ([pscustomobject]@{ type = "command"; command = $cmd }) -Force
         }
-        $how = if ($chained) { " (Twoj poprzedni statusline dziala dalej)" } else { "" }
-        Write-Host "Statusline: kontekst i koszt sesji wysylane na serwer$how"
+        $how = if ($chained) { " (your previous statusline keeps running)" } else { "" }
+        Write-Host "Statusline: session context use and cost sent to the server$how"
     } catch {
-        Write-Warning "Statusline: nie udalo sie ustawic: $($_.Exception.Message)"
+        Write-Warning "Statusline: could not set it up: $($_.Exception.Message)"
     }
 }
 
@@ -210,7 +210,7 @@ function Install-Skill {
     $dir = Join-Path $HOME ".claude\skills\$SkillName"
     $path = Join-Path $dir "SKILL.md"
     if ($Uninstall) {
-        if (Test-Path $path) { Remove-Item $path; Write-Host "Skill: usunieto $path" }
+        if (Test-Path $path) { Remove-Item $path; Write-Host "Skill: removed $path" }
         if ((Test-Path $dir) -and -not (Get-ChildItem -Force $dir)) { Remove-Item $dir }
         return
     }
@@ -220,9 +220,9 @@ function Install-Skill {
         $src = $src.Replace("http://SERVER:7777", $Server)
         New-Item -ItemType Directory -Force $dir | Out-Null
         [IO.File]::WriteAllText($path, $src, (New-Object Text.UTF8Encoding $false))
-        Write-Host "Skill: zapisany w $path - w Claude Code: /$SkillName (analiza statystyk i rekomendacje)"
+        Write-Host "Skill: written to $path - in Claude Code: /$SkillName (stats analysis and recommendations)"
     } catch {
-        Write-Warning "Skill: nie udalo sie zapisac $path`: $($_.Exception.Message)"
+        Write-Warning "Skill: could not write $path`: $($_.Exception.Message)"
     }
 }
 
@@ -257,7 +257,7 @@ function New-HeartbeatTask {
         -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     New-ScheduledTask -Action (New-HeartbeatAction (Get-HeartbeatUrl)) -Trigger $triggers -Settings $settings `
-        -Principal $principal -Description "agent-status: co minute zglasza serwerowi $Server, ze maszyna '$Name' dziala."
+        -Principal $principal -Description "agent-status: tells the server $Server every minute that machine '$Name' is running."
 }
 
 function Install-Heartbeat {
@@ -265,37 +265,37 @@ function Install-Heartbeat {
         if ($Uninstall) {
             if (Get-ScheduledTask -TaskName $HeartbeatTask -ErrorAction SilentlyContinue) {
                 Unregister-ScheduledTask -TaskName $HeartbeatTask -Confirm:$false
-                Write-Host "Heartbeat: usunieto zadanie '$HeartbeatTask' z Harmonogramu zadan"
+                Write-Host "Heartbeat: removed task '$HeartbeatTask' from Task Scheduler"
             }
             return
         }
         Register-ScheduledTask -TaskName $HeartbeatTask -InputObject (New-HeartbeatTask) -Force | Out-Null
-        Write-Host "Heartbeat: zadanie '$HeartbeatTask' w Harmonogramie zadan (co minute)"
+        Write-Host "Heartbeat: task '$HeartbeatTask' in Task Scheduler (every minute)"
     } catch {
-        Write-Warning "Heartbeat: nie udalo sie ustawic zadania '$HeartbeatTask': $($_.Exception.Message)"
+        Write-Warning "Heartbeat: could not set up task '$HeartbeatTask': $($_.Exception.Message)"
     }
 }
 
 $claude = -not $SkipClaude -and ((Test-Path (Join-Path $HOME ".claude")) -or (Get-Command claude -ErrorAction SilentlyContinue))
 $opencode = -not $SkipOpenCode -and ((Test-Path (Join-Path $HOME ".config\opencode")) -or (Get-Command opencode -ErrorAction SilentlyContinue))
 
-if ($claude) { Install-Claude } else { Write-Host "Claude Code: pominieto (nie znaleziono)" }
+if ($claude) { Install-Claude } else { Write-Host "Claude Code: skipped (not found)" }
 if ($claude -and -not $SkipSkill) { Install-Skill }
-elseif ($claude) { Write-Host "Skill: pominieto (-SkipSkill)" }
-if ($opencode) { Install-OpenCode } else { Write-Host "OpenCode: pominieto (nie znaleziono)" }
-if (-not $SkipHeartbeat) { Install-Heartbeat } else { Write-Host "Heartbeat: pominieto (-SkipHeartbeat)" }
+elseif ($claude) { Write-Host "Skill: skipped (-SkipSkill)" }
+if ($opencode) { Install-OpenCode } else { Write-Host "OpenCode: skipped (not found)" }
+if (-not $SkipHeartbeat) { Install-Heartbeat } else { Write-Host "Heartbeat: skipped (-SkipHeartbeat)" }
 
 if (-not $Uninstall) {
     try {
         Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 "$Server/api/sessions" | Out-Null
-        Write-Host "Serwer $Server odpowiada."
+        Write-Host "Server $Server responds."
         # First heartbeat now, so the machine shows as online without waiting a minute.
         if (-not $SkipHeartbeat) {
             try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Method Post (Get-HeartbeatUrl) | Out-Null }
-            catch { Write-Warning "Serwer nie przyjal heartbeatu ($($_.Exception.Message)). Zaktualizuj serwer." }
+            catch { Write-Warning "The server did not accept the heartbeat ($($_.Exception.Message)). Update the server." }
         }
     } catch {
-        Write-Warning "Serwer $Server nie odpowiada. Sprawdz adres i zapore na serwerze (port TCP)."
+        Write-Warning "Server $Server does not respond. Check the address and the firewall on the server (TCP port)."
     }
-    Write-Host "Gotowe. Nowe sesje beda widoczne jako '$Name'. Uruchom ponownie otwarte sesje Claude Code / OpenCode."
+    Write-Host "Done. New sessions will show up as '$Name'. Restart open Claude Code / OpenCode sessions."
 }

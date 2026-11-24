@@ -8,6 +8,8 @@
   // Set before the first paint, so the page never flashes in the other theme.
   try { document.documentElement.dataset.theme = localStorage.getItem("theme") === "light" ? "light" : "dark"; }
   catch { document.documentElement.dataset.theme = "dark"; }
+  // Polish unless switched to English (the language button); shared with the stats page.
+  try { document.documentElement.lang = localStorage.getItem("lang") === "en" ? "en" : "pl"; } catch {}
 </script>
 <style>
   /* Swimlanes: each session is a row with its recent states drawn on a strip; "now" is the right edge.
@@ -46,6 +48,8 @@
   .group > button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
   .group > button:focus-visible, .group > .btn:focus-visible, .more > button:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
   .group > button.locked { color: var(--warn); }
+  /* Language: the code of the language shown now, in place of an icon. */
+  .group > button.lang { font: 600 13px/1 var(--mono); letter-spacing: .04em; }
   .ico { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   /* Words next to the layout icons only where there is room for them. */
   .lbl { display: none; }
@@ -73,6 +77,8 @@
   .menu .menu-range button + button { border-top: 1px solid var(--line); }
   .menu .menu-range button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
   .menu .menu-range button[aria-pressed="true"]::after { content: none; }
+  /* The language moves into the menu on a narrow phone (see the 420px query). */
+  .menu-range.menu-lang { display: none; }
   .menu-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
   .menu-legend i { display: inline-block; width: 14px; height: 8px; margin-right: 6px; }
   button, .head { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
@@ -181,6 +187,7 @@
   .subs small { flex: none; font: 11px var(--mono); color: var(--muted); }
   .subs li.quiet .type { color: var(--muted); }
   .subs li.quiet small::after { content: " · cisza"; color: var(--warn); }
+  :root[lang="en"] .subs li.quiet small::after { content: " · quiet"; }
   /* Narrow: the current tool call gets a line of its own instead of being cut to "Bash:…". */
   @media (max-width: 700px) {
     .subs .doing { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
@@ -253,6 +260,11 @@
     .menu-range { display: flex; }
     .beacon { font-size: 18px; padding: 10px 12px; }
   }
+  /* A narrow phone has no room for a fifth button in the bar: the language goes into the menu. */
+  @media (max-width: 420px) {
+    .bar #lang { display: none; }
+    .menu-range.menu-lang { display: flex; }
+  }
   @media (max-width: 700px) {
     .ticks span:not(.first):not(.last):not(.mid) { display: none; }
     .lanes { grid-template-columns: minmax(0, 1fr); }
@@ -268,46 +280,52 @@
 <body>
 <header>
   <div class="title">
-    <h1>Agenci</h1>
+    <h1 data-t="agents">Agenci</h1>
     <div class="summary" id="summary"></div>
   </div>
   <div class="bar">
-    <div class="group" role="group" aria-label="Układ listy">
-      <button type="button" data-group="host" data-icon="host" title="Według maszyny"><span class="lbl">maszyna</span></button>
-      <button type="button" data-group="project" data-icon="project" title="Według projektu"><span class="lbl">projekt</span></button>
-      <button type="button" data-group="queue" data-icon="queue" title="Kolejka: najpierw to, co czeka na Ciebie"><span class="lbl">kolejka</span></button>
+    <div class="group" role="group" aria-label="Układ listy" data-t-aria="layout">
+      <button type="button" data-group="host" data-icon="host" title="Według maszyny" data-t-title="byHost"><span class="lbl" data-t="host">maszyna</span></button>
+      <button type="button" data-group="project" data-icon="project" title="Według projektu" data-t-title="byProject"><span class="lbl" data-t="project">projekt</span></button>
+      <button type="button" data-group="queue" data-icon="queue" title="Kolejka: najpierw to, co czeka na Ciebie" data-t-title="byQueue"><span class="lbl" data-t="queue">kolejka</span></button>
     </div>
-    <div class="group range" role="group" aria-label="Zakres osi czasu">
-      <button type="button" data-range="15m" title="Ostatnie 15 minut">15m</button>
-      <button type="button" data-range="1h" title="Ostatnia godzina">1h</button>
-      <button type="button" data-range="4h" title="Ostatnie 4 godziny">4h</button>
-      <button type="button" data-range="12h" title="Ostatnie 12 godzin">12h</button>
+    <div class="group range" role="group" aria-label="Zakres osi czasu" data-t-aria="range">
+      <button type="button" data-range="15m" title="Ostatnie 15 minut" data-t-title="range15m">15m</button>
+      <button type="button" data-range="1h" title="Ostatnia godzina" data-t-title="range1h">1h</button>
+      <button type="button" data-range="4h" title="Ostatnie 4 godziny" data-t-title="range4h">4h</button>
+      <button type="button" data-range="12h" title="Ostatnie 12 godzin" data-t-title="range12h">12h</button>
     </div>
-    <div class="group" role="group" aria-label="Narzędzia">
+    <div class="group" role="group" aria-label="Narzędzia" data-t-aria="tools">
       <button type="button" id="theme" data-icon="theme"></button>
+      <button type="button" id="lang" class="lang"></button>
       <button type="button" id="sound" data-icon="sound-off" aria-pressed="false"></button>
-      <a class="btn" href="/stats" data-icon="chart" title="Statystyki" aria-label="Statystyki"></a>
+      <a class="btn" href="/stats" data-icon="chart" title="Statystyki" aria-label="Statystyki" data-t-title="stats" data-t-aria="stats"></a>
       <div class="more">
-        <button type="button" id="more" data-icon="more" title="Więcej" aria-label="Więcej" aria-expanded="false" aria-controls="menu"></button>
+        <button type="button" id="more" data-icon="more" title="Więcej" aria-label="Więcej" data-t-title="more" data-t-aria="more" aria-expanded="false" aria-controls="menu"></button>
         <div class="menu" id="menu" role="menu" hidden>
-          <div class="menu-range" role="group" aria-label="Zakres osi czasu">
-            <span>oś czasu</span>
+          <div class="menu-range" role="group" aria-label="Zakres osi czasu" data-t-aria="range">
+            <span data-t="timeline">oś czasu</span>
             <button type="button" data-range="15m">15m</button>
             <button type="button" data-range="1h">1h</button>
             <button type="button" data-range="4h">4h</button>
             <button type="button" data-range="12h">12h</button>
           </div>
-          <button type="button" role="menuitemcheckbox" id="show-ended" data-icon="eye"><span>pokaż zakończone</span></button>
-          <button type="button" role="menuitem" id="clear-ended" data-icon="trash"><span>usuń zakończone z listy</span></button>
-          <button type="button" role="menuitemcheckbox" id="notify" data-icon="bell" aria-pressed="false"><span>powiadomienia</span></button>
-          <button type="button" role="menuitemcheckbox" id="awake" data-icon="sun" aria-pressed="false"><span>nie wygaszaj ekranu</span></button>
-          <button type="button" role="menuitemcheckbox" id="fullscreen" data-icon="expand" aria-pressed="false"><span>pełny ekran</span></button>
+          <div class="menu-range menu-lang" role="group" aria-label="Język" data-t-aria="language">
+            <span data-t="language">język</span>
+            <button type="button" data-lang="pl" lang="pl" title="Polski">PL</button>
+            <button type="button" data-lang="en" lang="en" title="English">EN</button>
+          </div>
+          <button type="button" role="menuitemcheckbox" id="show-ended" data-icon="eye"><span data-t="showEnded">pokaż zakończone</span></button>
+          <button type="button" role="menuitem" id="clear-ended" data-icon="trash"><span data-t="clearEnded">usuń zakończone z listy</span></button>
+          <button type="button" role="menuitemcheckbox" id="notify" data-icon="bell" aria-pressed="false"><span data-t="notifications">powiadomienia</span></button>
+          <button type="button" role="menuitemcheckbox" id="awake" data-icon="sun" aria-pressed="false"><span data-t="awake">nie wygaszaj ekranu</span></button>
+          <button type="button" role="menuitemcheckbox" id="fullscreen" data-icon="expand" aria-pressed="false"><span data-t="fullscreen">pełny ekran</span></button>
           <div class="menu-legend" aria-hidden="true">
-            <span><i class="s-waiting"></i>czeka na Ciebie</span>
-            <span><i class="s-working"></i>pracuje</span>
-            <span><i class="s-error"></i>błąd</span>
-            <span><i class="s-stale"></i>brak sygnału</span>
-            <span><i class="s-idle"></i>gotowy</span>
+            <span><i class="s-waiting"></i><span data-t="st.waiting">czeka na Ciebie</span></span>
+            <span><i class="s-working"></i><span data-t="st.working">pracuje</span></span>
+            <span><i class="s-error"></i><span data-t="st.error">błąd</span></span>
+            <span><i class="s-stale"></i><span data-t="st.stale">brak sygnału</span></span>
+            <span><i class="s-idle"></i><span data-t="st.idle">gotowy</span></span>
           </div>
         </div>
       </div>
@@ -316,7 +334,7 @@
 </header>
 <button type="button" id="beacon" class="beacon" hidden></button>
 <div id="machines" class="machines" hidden></div>
-<div id="offline" class="offline" hidden>Brak połączenia z serwerem</div>
+<div id="offline" class="offline" hidden data-t="offline">Brak połączenia z serwerem</div>
 <div id="late" class="offline" hidden></div>
 <div id="hosts" class="hosts"></div>
 <script>
@@ -353,12 +371,216 @@ function setIcon(e, name) {
 }
 for (const e of document.querySelectorAll("[data-icon]")) setIcon(e, e.dataset.icon);
 
+// Language: Polish or English, remembered on this device under "lang" (the stats page reads
+// the same). Every text the page writes itself comes from TEXT; what the server sends (session
+// details, history) is Polish and goes through srv(), which swaps only its known fixed parts.
+let lang = document.documentElement.lang === "en" ? "en" : "pl";
+const p3 = (n, one, few, many) => {   // Polish: 1 sesja, 2 sesje, 5 sesji
+  if (n === 1) return one;
+  const d = n % 10, dd = n % 100;
+  return d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
+};
+const p2 = (n, one, other) => n === 1 ? one : other;
+const TEXT = {
+  pl: {
+    agents: "Agenci", layout: "Układ listy", byHost: "Według maszyny", byProject: "Według projektu",
+    byQueue: "Kolejka: najpierw to, co czeka na Ciebie", host: "maszyna", project: "projekt", queue: "kolejka",
+    range: "Zakres osi czasu", range15m: "Ostatnie 15 minut", range1h: "Ostatnia godzina", range4h: "Ostatnie 4 godziny",
+    range12h: "Ostatnie 12 godzin", tools: "Narzędzia", stats: "Statystyki", more: "Więcej", timeline: "oś czasu",
+    language: "język", showEnded: "pokaż zakończone", clearEnded: "usuń zakończone z listy", notifications: "powiadomienia",
+    awake: "nie wygaszaj ekranu", fullscreen: "pełny ekran", offline: "Brak połączenia z serwerem",
+    themeDark: "Ciemny motyw. Kliknij, aby przełączyć na jasny", themeLight: "Jasny motyw. Kliknij, aby przełączyć na ciemny",
+    toLight: "Przełącz na jasny motyw", toDark: "Przełącz na ciemny motyw",
+    langTitle: "Język: polski. Kliknij, aby przełączyć na angielski", langAria: "Język: polski. Przełącz na angielski",
+    "st.waiting": "czeka na Ciebie", "st.working": "pracuje", "st.error": "błąd", "st.idle": "gotowy", "st.ended": "zakończona",
+    "st.stale": "brak sygnału", "short.waiting": "czeka",
+    "lane.waiting": "Czeka na Ciebie", "lane.check": "Do sprawdzenia", "lane.working": "Pracuje", "lane.idle": "Gotowe",
+    "lane.ended": "Zakończone",
+    noProject: "bez projektu",
+    "mode.default": "domyślny", "mode.plan": "planowanie", "mode.acceptEdits": "akceptuje edycje",
+    "mode.bypassPermissions": "bez pytań", "mode.dontAsk": "bez pytań", "mode.auto": "auto",
+    ago: " temu", for: "od ", now: "teraz",
+    dir: "Katalog", machine: "Maszyna", agent: "Agent", model: "Model", mode: "Tryb", session: "Sesja",
+    started: "Rozpoczęta", lastSignal: "Ostatni sygnał", activity: "Aktywność", tasks: "Zadania", context: "Kontekst",
+    cost: "Koszt", codeChanges: "Zmiany w kodzie", subagentsNow: "Podagenci teraz",
+    toolsUsed: "Użyte narzędzia", lastPrompt: "Ostatnie polecenie", lastError: "Ostatni błąd",
+    lastReply: "Ostatnia odpowiedź", history: "Historia",
+    nPrompts: n => n + " " + p3(n, "polecenie", "polecenia", "poleceń"),
+    nToolCalls: n => n + " " + p3(n, "narzędzie", "narzędzia", "narzędzi"),
+    nPermissions: n => n + " " + p3(n, "prośba o zgodę", "prośby o zgodę", "próśb o zgodę"),
+    nToolErrors: n => n + " " + p3(n, "błąd narzędzia", "błędy narzędzi", "błędów narzędzi"),
+    nSubagents: n => n + " " + p3(n, "podagent", "podagenty", "podagentów"),
+    nCompactions: n => n + " " + p3(n, "kompaktowanie", "kompaktowania", "kompaktowań"),
+    todosDone: (done, total) => done + " z " + total + " zrobione",
+    tokens: (used, limit) => used + "k z " + limit + "k tokenów",
+    lines: (add, del) => "+" + add + " / −" + del + " linii",
+    since: t => "od " + t,
+    remove: "Usuń z listy", removeTitle: "Sesja wróci, jeśli agent wyśle kolejne zdarzenie",
+    renameMachine: "Zmień nazwę maszyny", renameTitle: h => "Nazwa widoczna na tej stronie dla maszyny " + h,
+    removeFailed: "Nie udało się usunąć sesji",
+    renamePrompt: h => "Nazwa maszyny " + h + " na tej stronie (puste = przywróć oryginalną):",
+    renameFailed: "Nie udało się zmienić nazwy maszyny",
+    clearConfirm: n => "Usunąć z listy " + n + " " + p3(n, "zakończoną sesję", "zakończone sesje", "zakończonych sesji") + "?",
+    clickDetails: "Kliknij, aby zobaczyć szczegóły",
+    subagent: "podagent", subagentOf: (kind, parent) => kind + " sesji " + parent,
+    todosChip: (done, total) => "zadania " + done + "/" + total, contextChip: p => "kontekst " + p + "%",
+    lastSeen: t => "ostatnio " + t + " temu",
+    rename: "zmień nazwę", renameAria: n => "Zmień nazwę maszyny " + n,
+    kidsDone: n => n + " " + p3(n, "podagent skończył", "podagenty skończyły", "podagentów skończyło"),
+    older: n => "starsze: " + n, olderNote: "gotowe lub zakończone, bez zmian od ponad godziny",
+    heartbeat: "Wysyła sygnał życia", noHeartbeat: t => "Brak sygnału życia od " + t, offlineFor: "offline od ",
+    noSessions: "Brak sesji", active: n => n + " aktywne",
+    summary: (w, k) => [w, " czeka · ", k, " pracuje"],
+    beaconWaiting: n => n + " " + p3(n, "sesja czeka", "sesje czekają", "sesji czeka") + " na Ciebie",
+    beaconCheck: n => n + " " + p3(n, "sesja", "sesje", "sesji") + " do sprawdzenia",
+    longestFor: "najdłużej od ", subagentIn: t => t + " w ", showQueue: "Pokaż kolejkę",
+    late: s => "Dane sprzed " + s + " s — serwer nie odpowiada",
+    "alert.waiting": "Czeka na Ciebie", "alert.error": "Błąd", "alert.stale": "Brak sygnału", "alert.idle": "Skończył pracę",
+    insecure: (what, origin) => what + " działa tylko na localhost albo przez HTTPS, a ta strona jest otwarta pod " + origin + ".\n\n" +
+      "Aby to włączyć na tym urządzeniu: otwórz edge://flags/#unsafely-treat-insecure-origin-as-secure " +
+      "(w Chrome: chrome://flags/#unsafely-treat-insecure-origin-as-secure), wpisz " + origin +
+      ", ustaw Enabled i uruchom przeglądarkę ponownie.",
+    sound: "Dźwięk",
+    soundLocked: "Dźwięk wstrzymany przez przeglądarkę: dotknij strony, aby go włączyć",
+    soundOn: "Sygnał dźwiękowy, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę. Kliknij, aby wyłączyć",
+    soundOff: "Włącz sygnał dźwiękowy, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę",
+    awakeNo: "Przeglądarka pozwala blokować wygaszanie ekranu tylko na localhost albo przez HTTPS",
+    awakeOn: "Ekran nie wygasa, dopóki ta strona jest widoczna. Kliknij, aby wyłączyć",
+    awakeOff: "Nie wygaszaj ekranu, dopóki ta strona jest widoczna", awakeWhat: "Blokada wygaszania ekranu",
+    notifyNo: "Przeglądarka pozwala na powiadomienia tylko na localhost albo przez HTTPS",
+    notifyDenied: "Powiadomienia są zablokowane dla tej strony w ustawieniach przeglądarki",
+    notifyOn: "Powiadamiam, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę. Kliknij, aby wyłączyć",
+    notifyOff: "Włącz powiadomienia, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę",
+    notifyWhat: "Powiadomienia",
+    notifyBlocked: "Powiadomienia są zablokowane dla tej strony. Odblokuj je w ustawieniach witryny (ikona obok adresu).",
+    notifyHello: "Powiadomienia włączone", notifyHelloBody: "Dam znać, gdy agent będzie Cię potrzebował albo skończy pracę.",
+  },
+  en: {
+    agents: "Agents", layout: "List layout", byHost: "By machine", byProject: "By project",
+    byQueue: "Queue: what waits for you first", host: "machine", project: "project", queue: "queue",
+    range: "Timeline range", range15m: "Last 15 minutes", range1h: "Last hour", range4h: "Last 4 hours",
+    range12h: "Last 12 hours", tools: "Tools", stats: "Statistics", more: "More", timeline: "timeline",
+    language: "language", showEnded: "show ended", clearEnded: "remove ended from the list", notifications: "notifications",
+    awake: "keep the screen on", fullscreen: "full screen", offline: "No connection to the server",
+    themeDark: "Dark theme. Click to switch to light", themeLight: "Light theme. Click to switch to dark",
+    toLight: "Switch to the light theme", toDark: "Switch to the dark theme",
+    langTitle: "Language: English. Click to switch to Polish", langAria: "Language: English. Switch to Polish",
+    "st.waiting": "waiting for you", "st.working": "working", "st.error": "error", "st.idle": "ready", "st.ended": "ended",
+    "st.stale": "no signal", "short.waiting": "waiting",
+    "lane.waiting": "Waiting for you", "lane.check": "To check", "lane.working": "Working", "lane.idle": "Ready",
+    "lane.ended": "Ended",
+    noProject: "no project",
+    "mode.default": "default", "mode.plan": "planning", "mode.acceptEdits": "accepts edits",
+    "mode.bypassPermissions": "no prompts", "mode.dontAsk": "no prompts", "mode.auto": "auto",
+    ago: " ago", for: "for ", now: "now",
+    dir: "Directory", machine: "Machine", agent: "Agent", model: "Model", mode: "Mode", session: "Session",
+    started: "Started", lastSignal: "Last signal", activity: "Activity", tasks: "Tasks", context: "Context",
+    cost: "Cost", codeChanges: "Code changes", subagentsNow: "Subagents now",
+    toolsUsed: "Tools used", lastPrompt: "Last prompt", lastError: "Last error",
+    lastReply: "Last reply", history: "History",
+    nPrompts: n => n + " " + p2(n, "prompt", "prompts"),
+    nToolCalls: n => n + " " + p2(n, "tool call", "tool calls"),
+    nPermissions: n => n + " " + p2(n, "permission request", "permission requests"),
+    nToolErrors: n => n + " " + p2(n, "tool error", "tool errors"),
+    nSubagents: n => n + " " + p2(n, "subagent", "subagents"),
+    nCompactions: n => n + " " + p2(n, "compaction", "compactions"),
+    todosDone: (done, total) => done + " of " + total + " done",
+    tokens: (used, limit) => used + "k of " + limit + "k tokens",
+    lines: (add, del) => "+" + add + " / −" + del + " lines",
+    since: t => "for " + t,
+    remove: "Remove from the list", removeTitle: "The session comes back if the agent sends another event",
+    renameMachine: "Rename the machine", renameTitle: h => "Name shown on this page for the machine " + h,
+    removeFailed: "Could not remove the session",
+    renamePrompt: h => "Name of the machine " + h + " on this page (empty = restore the original):",
+    renameFailed: "Could not rename the machine",
+    clearConfirm: n => "Remove " + n + " ended " + p2(n, "session", "sessions") + " from the list?",
+    clickDetails: "Click to see the details",
+    subagent: "subagent", subagentOf: (kind, parent) => kind + " of " + parent,
+    todosChip: (done, total) => "tasks " + done + "/" + total, contextChip: p => "context " + p + "%",
+    lastSeen: t => "last " + t + " ago",
+    rename: "rename", renameAria: n => "Rename the machine " + n,
+    kidsDone: n => n + " " + p2(n, "subagent finished", "subagents finished"),
+    older: n => "older: " + n, olderNote: "ready or ended, unchanged for over an hour",
+    heartbeat: "Sends a heartbeat", noHeartbeat: t => "No heartbeat since " + t, offlineFor: "offline for ",
+    noSessions: "No sessions", active: n => n + " active",
+    summary: (w, k) => [w, " waiting · ", k, " working"],
+    beaconWaiting: n => n + " " + p2(n, "session is", "sessions are") + " waiting for you",
+    beaconCheck: n => n + " " + p2(n, "session", "sessions") + " to check",
+    longestFor: "longest for ", subagentIn: t => t + " in ", showQueue: "Show the queue",
+    late: s => "Data from " + s + " s ago — the server is not responding",
+    "alert.waiting": "Waiting for you", "alert.error": "Error", "alert.stale": "No signal", "alert.idle": "Finished",
+    insecure: (what, origin) => what + ": available only on localhost or over HTTPS, and this page is open at " + origin + ".\n\n" +
+      "To allow it on this device: open edge://flags/#unsafely-treat-insecure-origin-as-secure " +
+      "(in Chrome: chrome://flags/#unsafely-treat-insecure-origin-as-secure), enter " + origin +
+      ", set it to Enabled and restart the browser.",
+    sound: "Sound",
+    soundLocked: "Sound held back by the browser: touch the page to turn it on",
+    soundOn: "A sound when a session waits for you, fails, loses its signal or finishes. Click to turn off",
+    soundOff: "Play a sound when a session waits for you, fails, loses its signal or finishes",
+    awakeNo: "The browser lets a page keep the screen on only on localhost or over HTTPS",
+    awakeOn: "The screen stays on while this page is visible. Click to turn off",
+    awakeOff: "Keep the screen on while this page is visible", awakeWhat: "Keeping the screen on",
+    notifyNo: "The browser allows notifications only on localhost or over HTTPS",
+    notifyDenied: "Notifications are blocked for this page in the browser settings",
+    notifyOn: "Notifying when a session waits for you, fails, loses its signal or finishes. Click to turn off",
+    notifyOff: "Turn on notifications when a session waits for you, fails, loses its signal or finishes",
+    notifyWhat: "Notifications",
+    notifyBlocked: "Notifications are blocked for this page. Unblock them in the site settings (the icon next to the address).",
+    notifyHello: "Notifications on", notifyHelloBody: "I will let you know when an agent needs you or finishes its work.",
+  },
+};
+// t("key", ...args): the text in the current language (a function entry gets the args).
+function t(key, ...args) {
+  const v = TEXT[lang][key] ?? TEXT.pl[key];
+  return typeof v === "function" ? v(...args) : v ?? key;
+}
+// Fixed Polish parts of what the server sends, for English display only. The server keeps
+// them Polish (the statistics match on them); free text after a prefix stays as it is.
+const SERVER_EN = [
+  ["zgoda: ", "permission: "], ["pytanie: ", "question: "], ["pytanie", "question"],
+  ["decyzja: ", "decision: "], ["odmowa: ", "denied: "], ["błąd narzędzia: ", "tool error: "],
+  ["błąd: limit zapytań", "error: rate limit"], ["błąd: przeciążenie API", "error: API overloaded"],
+  ["błąd: błąd logowania", "error: authentication failed"], ["błąd: płatności", "error: billing"],
+  ["błąd: błąd serwera API", "error: API server error"], ["błąd: za długa odpowiedź", "error: response too long"],
+  ["błąd: ", "error: "], ["podagent: ", "subagent: "], ["podagent ", "subagent "], ["podagent", "subagent"],
+  ["propozycja sesji: ", "session offer: "], ["propozycja sesji", "session offer"],
+  ["plan do akceptacji", "plan awaiting approval"], ["zrobione: ", "done: "],
+  ["kompaktuje kontekst", "compacting context"], ["kontekst skompaktowany", "context compacted"],
+  ["skończył", "finished"], ["ponawia ", "retrying "],
+  ["przerwane przez Ciebie", "interrupted by you"], ["przerwane: zamknięcie OpenCode", "interrupted: OpenCode shut down"],
+  ["przerwane: nowe polecenie", "interrupted: new prompt"], ["przerwane: brak aktywności", "interrupted: inactivity"],
+  ["przerwane: ", "interrupted: "], ["przerwane", "interrupted"],
+  ["limit: wznowiono automatycznie", "limit: resumed automatically"],
+  ["limit minął: naciśnij Enter, by wznowić", "limit over: press Enter to resume"],
+  ["limit: bez automatycznego wznowienia", "limit: no automatic resume"],
+  ["narzędzie: ", "tool: "], ["narzędzie", "tool"],
+].sort((a, b) => b[0].length - a[0].length);
+function srv(s) {
+  if (lang === "pl" || !s) return s;
+  for (const [pl, en] of SERVER_EN) {
+    // A whole word only: "podagent" must not turn "podagenty skończyły" into English halves.
+    if (s.startsWith(pl) && (s.length === pl.length || /[\s:]$/.test(pl) || /^[\s:(—,]/.test(s.slice(pl.length)))) {
+      return en + s.slice(pl.length);
+    }
+  }
+  return s;
+}
+const locale = () => lang === "en" ? "en-GB" : "pl-PL";
+// Texts written into the page's own markup: data-t (text), data-t-title, data-t-aria.
+function applyStatic() {
+  document.documentElement.lang = lang;
+  document.title = t("agents");   // render() puts the waiting count in front again
+  for (const e of document.querySelectorAll("[data-t]")) e.textContent = t(e.dataset.t);
+  for (const e of document.querySelectorAll("[data-t-title]")) e.title = t(e.dataset.tTitle);
+  for (const e of document.querySelectorAll("[data-t-aria]")) e.setAttribute("aria-label", t(e.dataset.tAria));
+}
+
 // Dark or light, chosen here and remembered on this device (the stats page reads the same).
 const themeBtn = document.getElementById("theme");
 function showTheme() {
   const dark = document.documentElement.dataset.theme !== "light";
-  themeBtn.title = dark ? "Ciemny motyw. Kliknij, aby przełączyć na jasny" : "Jasny motyw. Kliknij, aby przełączyć na ciemny";
-  themeBtn.setAttribute("aria-label", dark ? "Przełącz na jasny motyw" : "Przełącz na ciemny motyw");
+  themeBtn.title = t(dark ? "themeDark" : "themeLight");
+  themeBtn.setAttribute("aria-label", t(dark ? "toLight" : "toDark"));
 }
 themeBtn.addEventListener("click", () => {
   const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
@@ -367,6 +589,32 @@ themeBtn.addEventListener("click", () => {
   showTheme();
 });
 showTheme();
+
+// The language button shows the language in use; a tap switches to the other one and
+// redraws everything at once. On a narrow phone the same choice sits in the menu.
+const langBtn = document.getElementById("lang");
+function showLang() {
+  langBtn.textContent = lang.toUpperCase();
+  langBtn.title = t("langTitle");
+  langBtn.setAttribute("aria-label", t("langAria"));
+  for (const b of document.querySelectorAll("[data-lang]")) b.setAttribute("aria-pressed", String(b.dataset.lang === lang));
+}
+function setLang(l) {
+  lang = l;
+  try { localStorage.setItem("lang", l); } catch {}
+  applyStatic();
+  showLang();
+  showTheme();
+  showSound();
+  showAwake();
+  showNotify();
+  lastSig = "";   // rebuild the list, not just tick the ages
+  paint();
+}
+langBtn.addEventListener("click", () => setLang(lang === "pl" ? "en" : "pl"));
+for (const b of document.querySelectorAll("[data-lang]")) b.addEventListener("click", () => setLang(b.dataset.lang));
+applyStatic();
+showLang();
 
 // The "more" menu: opens under its button, closes on a choice elsewhere or Escape.
 const moreBtn = document.getElementById("more"), menu = document.getElementById("menu");
@@ -380,8 +628,9 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && !menu.hidd
 // Actions that leave the page state obvious close the menu; switches keep it open.
 for (const id of ["clear-ended", "fullscreen"]) document.getElementById(id).addEventListener("click", () => openMenu(false));
 
-const LABEL = { waiting: "czeka na Ciebie", working: "pracuje", error: "błąd", idle: "gotowy", ended: "zakończona", stale: "brak sygnału" };
-const SHORT = { waiting: "czeka", working: "pracuje", error: "błąd", idle: "gotowy", ended: "zakończona", stale: "brak sygnału" };
+// State names: full (legend, tooltips, history) and short (the state column).
+const LABEL = st => TEXT.pl["st." + st] ? t("st." + st) : st;
+const SHORT = st => st === "waiting" ? t("short.waiting") : LABEL(st);
 const AGENT = { claude: "Claude Code", opencode: "OpenCode" };
 const MIN = 60e3, HOUR = 60 * MIN;
 // Window width and grid step of the strips.
@@ -393,11 +642,11 @@ const RANGES = {
 };
 // Queue lanes, most urgent first.
 const LANES = [
-  { id: "waiting", title: "Czeka na Ciebie", has: s => s.state === "waiting" },
-  { id: "check", title: "Do sprawdzenia", has: s => s.state === "error" || s.stale },
-  { id: "working", title: "Pracuje", has: s => s.state === "working" && !s.stale },
-  { id: "idle", title: "Gotowe", has: s => s.state === "idle" },
-  { id: "ended", title: "Zakończone", has: s => s.state === "ended" },
+  { id: "waiting", has: s => s.state === "waiting" },
+  { id: "check", has: s => s.state === "error" || s.stale },
+  { id: "working", has: s => s.state === "working" && !s.stale },
+  { id: "idle", has: s => s.state === "idle" },
+  { id: "ended", has: s => s.state === "ended" },
 ];
 
 function ago(iso, now) {
@@ -414,7 +663,7 @@ function el(tag, cls, text) {
   return e;
 }
 
-const NO_PROJECT = "bez projektu";
+const NO_PROJECT = "bez projektu";   // a group key; shown as t("noProject")
 
 // Names given to machines on this page, keyed by the name agents report.
 let hostNames = {};
@@ -442,7 +691,7 @@ function setRange(r) {
 }
 for (const b of document.querySelectorAll("[data-range]")) b.addEventListener("click", () => setRange(b.dataset.range));
 
-const MODE = { default: "domyślny", plan: "planowanie", acceptEdits: "akceptuje edycje", bypassPermissions: "bez pytań", dontAsk: "bez pytań", auto: "auto" };
+const MODE = m => TEXT.pl["mode." + m] ? t("mode." + m) : m;
 const expanded = new Set();   // keys of sessions whose details are open
 try { for (const k of JSON.parse(sessionStorage.getItem("expanded") || "[]")) expanded.add(k); } catch {}
 
@@ -452,13 +701,13 @@ function toggle(key) {
   paint();
 }
 
-const clock = iso => new Date(iso).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const hm = t => new Date(t).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
+const clock = iso => new Date(iso).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const hm = ms => new Date(ms).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
 const sameDay = (a, b) => a.toDateString() === b.toDateString();
 function when(iso, now) {
   const d = new Date(iso);
-  const day = sameDay(d, now) ? "" : d.toLocaleDateString("pl-PL", { day: "numeric", month: "short" }) + " ";
-  return day + clock(iso) + " (" + ago(iso, now) + " temu)";
+  const day = sameDay(d, now) ? "" : d.toLocaleDateString(locale(), { day: "numeric", month: "short" }) + " ";
+  return day + clock(iso) + " (" + ago(iso, now) + t("ago") + ")";
 }
 
 function details(s, now) {
@@ -468,81 +717,75 @@ function details(s, now) {
     if (!value) return;
     const dd = el("dd");
     dd.append(code ? el("code", null, value) : value);
-    dl.append(el("dt", null, label), dd);
+    dl.append(el("dt", null, t(label)), dd);
   };
-  item("Katalog", s.cwd, true);
-  item("Maszyna", hostNames[s.host] ? hostNames[s.host] + " (" + s.host + ")" : s.host);
-  item("Agent", AGENT[s.agent] || s.agent);
-  item("Model", s.model);
-  item("Tryb", s.mode && (MODE[s.mode] || s.mode));
-  item("Sesja", s.sessionId, true);
-  item("Rozpoczęta", s.startedAt && when(s.startedAt, now));
-  item("Ostatni sygnał", when(s.updatedAt, now) + (s.lastEvent ? " · " + s.lastEvent : ""));
+  item("dir", s.cwd, true);
+  item("machine", hostNames[s.host] ? hostNames[s.host] + " (" + s.host + ")" : s.host);
+  item("agent", AGENT[s.agent] || s.agent);
+  item("model", s.model);
+  item("mode", s.mode && MODE(s.mode));
+  item("session", s.sessionId, true);
+  item("started", s.startedAt && when(s.startedAt, now));
+  item("lastSignal", when(s.updatedAt, now) + (s.lastEvent ? " · " + s.lastEvent : ""));
   const counts = [];
-  if (s.prompts) counts.push(s.prompts + " " + plural(s.prompts, "polecenie", "polecenia", "poleceń"));
-  if (s.toolCalls) counts.push(s.toolCalls + " " + plural(s.toolCalls, "narzędzie", "narzędzia", "narzędzi"));
-  if (s.permissions) counts.push(s.permissions + " " + plural(s.permissions, "prośba o zgodę", "prośby o zgodę", "próśb o zgodę"));
-  if (s.toolFailures) counts.push(s.toolFailures + " " + plural(s.toolFailures, "błąd narzędzia", "błędy narzędzi", "błędów narzędzi"));
-  if (s.subagentRuns) counts.push(s.subagentRuns + " " + plural(s.subagentRuns, "podagent", "podagenty", "podagentów"));
-  if (s.compactions) counts.push(s.compactions + " " + plural(s.compactions, "kompaktowanie", "kompaktowania", "kompaktowań"));
-  item("Aktywność", counts.join(" · "));
-  if (s.todosTotal) item("Zadania", (s.todosDone || 0) + " z " + s.todosTotal + " zrobione");
+  if (s.prompts) counts.push(t("nPrompts", s.prompts));
+  if (s.toolCalls) counts.push(t("nToolCalls", s.toolCalls));
+  if (s.permissions) counts.push(t("nPermissions", s.permissions));
+  if (s.toolFailures) counts.push(t("nToolErrors", s.toolFailures));
+  if (s.subagentRuns) counts.push(t("nSubagents", s.subagentRuns));
+  if (s.compactions) counts.push(t("nCompactions", s.compactions));
+  item("activity", counts.join(" · "));
+  if (s.todosTotal) item("tasks", t("todosDone", s.todosDone || 0, s.todosTotal));
   if (s.contextPct != null) {
-    item("Kontekst", Math.round(s.contextPct) + "%" +
-      (s.contextTokens ? " (" + Math.round(s.contextTokens / 1000) + "k z " + Math.round((s.contextLimit || 0) / 1000) + "k tokenów)" : ""));
+    item("context", Math.round(s.contextPct) + "%" +
+      (s.contextTokens ? " (" + t("tokens", Math.round(s.contextTokens / 1000), Math.round((s.contextLimit || 0) / 1000)) + ")" : ""));
   }
-  if (s.costUsd) item("Koszt", "$" + s.costUsd.toFixed(2));
-  if (s.linesAdded || s.linesRemoved) item("Zmiany w kodzie", "+" + (s.linesAdded || 0) + " / −" + (s.linesRemoved || 0) + " linii");
+  if (s.costUsd) item("cost", "$" + s.costUsd.toFixed(2));
+  if (s.linesAdded || s.linesRemoved) item("codeChanges", t("lines", s.linesAdded || 0, s.linesRemoved || 0));
   if (s.subagents && s.subagents.length) {
-    item("Podagenci teraz", s.subagents.map(a => (a.type || "podagent") + " (od " + ago(a.since, now) + ")").join(", "));
+    item("subagentsNow", s.subagents.map(a => (a.type || t("subagent")) + " (" + t("since", ago(a.since, now)) + ")").join(", "));
   }
   box.append(dl);
 
-  const block = (title, node) => { box.append(el("h3", null, title), node); };
+  const block = (title, node) => { box.append(el("h3", null, t(title)), node); };
   if (s.tools && Object.keys(s.tools).length) {
     const tools = el("div", "tools");
     for (const [name, n] of Object.entries(s.tools).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
-      const t = el("span", null, name);
-      t.append(el("b", null, String(n)));
-      tools.append(t);
+      const chip = el("span", null, name);
+      chip.append(el("b", null, String(n)));
+      tools.append(chip);
     }
-    block("Użyte narzędzia", tools);
+    block("toolsUsed", tools);
   }
-  if (s.lastPrompt) block("Ostatnie polecenie", el("p", "text", s.lastPrompt));
-  if (s.lastMessage) block(s.state === "error" ? "Ostatni błąd" : "Ostatnia odpowiedź", el("p", "text", s.lastMessage));
+  if (s.lastPrompt) block("lastPrompt", el("p", "text", s.lastPrompt));
+  if (s.lastMessage) block(s.state === "error" ? "lastError" : "lastReply", el("p", "text", s.lastMessage));
   if (s.history && s.history.length) {
     const ul = el("ul", "history");
     for (const h of [...s.history].reverse()) {
       const li = el("li");
-      const t = el("time", null, clock(h.at));
-      t.dateTime = h.at;
+      const time = el("time", null, clock(h.at));
+      time.dateTime = h.at;
       const msg = el("div", "msg");
-      if (h.state) msg.append(el("span", "st " + h.state, LABEL[h.state] || h.state));
-      msg.append(h.detail ? h.detail : el("span", "kind", h.kind));
+      if (h.state) msg.append(el("span", "st " + h.state, LABEL(h.state)));
+      msg.append(h.detail ? srv(h.detail) : el("span", "kind", h.kind));
       li.title = h.kind;
-      li.append(t, msg);
+      li.append(time, msg);
       ul.append(li);
     }
-    block("Historia", ul);
+    block("history", ul);
   }
   const actions = el("div", "actions");
-  const del = el("button", null, "Usuń z listy");
+  const del = el("button", null, t("remove"));
   del.type = "button";
   del.dataset.remove = s.key;
-  del.title = "Sesja wróci, jeśli agent wyśle kolejne zdarzenie";
-  const ren = el("button", null, "Zmień nazwę maszyny");
+  del.title = t("removeTitle");
+  const ren = el("button", null, t("renameMachine"));
   ren.type = "button";
   ren.dataset.rename = s.host;
-  ren.title = "Nazwa widoczna na tej stronie dla maszyny " + s.host;
+  ren.title = t("renameTitle", s.host);
   actions.append(ren, del);
   box.append(actions);
   return box;
-}
-
-function plural(n, one, few, many) {
-  if (n === 1) return one;
-  const d = n % 10, dd = n % 100;
-  return d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
 }
 
 // State spans of a session as [from, to, state] in epoch ms; to = null means "until now".
@@ -584,7 +827,7 @@ function strip(s, now) {
     const i = el("i", "s-" + st);
     i.dataset.a = a;
     i.dataset.b = b == null ? "" : b;
-    i.title = (LABEL[st] || st) + " · " + hm(a) + "–" + (b == null ? "teraz" : hm(b));
+    i.title = LABEL(st) + " · " + hm(a) + "–" + (b == null ? t("now") : hm(b));
     place(i, now);
     box.append(i);
   }
@@ -596,11 +839,11 @@ function ticks() {
   const { ms, step } = RANGES[range];
   const box = el("div", "ticks");
   box.setAttribute("aria-hidden", "true");
-  for (let t = ms; t >= 0; t -= step) {
-    const label = t === 0 ? "teraz" : "−" + (t >= HOUR ? t / HOUR + " h" : t / MIN + " min");
+  for (let d = ms; d >= 0; d -= step) {
+    const label = d === 0 ? t("now") : "−" + (d >= HOUR ? d / HOUR + " h" : d / MIN + " min");
     // On a narrow screen only the ends and the middle keep their labels.
-    const sp = el("span", t === ms ? "first" : t === 0 ? "last" : t * 2 === ms ? "mid" : null, label);
-    sp.style.left = (100 * (ms - t) / ms) + "%";
+    const sp = el("span", d === ms ? "first" : d === 0 ? "last" : d * 2 === ms ? "mid" : null, label);
+    sp.style.left = (100 * (ms - d) / ms) + "%";
     box.append(sp);
   }
   return box;
@@ -622,12 +865,12 @@ async function removeSessions(query) {
     const r = await fetch("/api/sessions?" + query, { method: "DELETE" });
     if (!r.ok) throw new Error(r.status);
   } catch {
-    alert("Nie udało się usunąć sesji");
+    alert(t("removeFailed"));
   }
   tick();
 }
 async function renameHost(host) {
-  const name = prompt("Nazwa maszyny " + host + " na tej stronie (puste = przywróć oryginalną):", hostLabel(host));
+  const name = prompt(t("renamePrompt", host), hostLabel(host));
   if (name === null) return;
   try {
     const r = await fetch("/api/hosts", {
@@ -637,7 +880,7 @@ async function renameHost(host) {
     });
     if (!r.ok) throw new Error(r.status);
   } catch {
-    alert("Nie udało się zmienić nazwy maszyny");
+    alert(t("renameFailed"));
   }
   tick();
 }
@@ -645,7 +888,7 @@ async function renameHost(host) {
 document.getElementById("clear-ended").addEventListener("click", () => {
   const n = lastData ? lastData.sessions.filter(s => s.state === "ended").length : 0;
   if (n === 0) return;
-  if (confirm("Usunąć z listy " + n + " " + plural(n, "zakończoną sesję", "zakończone sesje", "zakończonych sesji") + "?")) {
+  if (confirm(t("clearConfirm", n))) {
     removeSessions("ended=1");
   }
 });
@@ -660,7 +903,7 @@ function row(s, now, nested) {
   head.setAttribute("role", "button");
   head.setAttribute("aria-expanded", String(isOpen));
   head.dataset.key = s.key;
-  if (!isOpen) head.title = "Kliknij, aby zobaczyć szczegóły";
+  if (!isOpen) head.title = t("clickDetails");
 
   const agent = AGENT[s.agent] || s.agent;
   const name = s.project || s.sessionId.slice(0, 8);
@@ -673,9 +916,9 @@ function row(s, now, nested) {
     const parent = lastData && lastData.sessions.find(p => p.key === s.parentKey);
     // The task is the title; the agent type goes underneath, so a narrow screen keeps the task.
     title = s.task || s.subagentType || name;
-    const kind = s.subagentType ? "podagent " + s.subagentType : "podagent";
+    const kind = s.subagentType ? t("subagent") + " " + s.subagentType : t("subagent");
     sub = nested ? kind
-      : kind + " sesji " + (parent ? parent.project || parent.sessionId.slice(0, 8) : "?") + " · " + host;
+      : t("subagentOf", kind, parent ? parent.project || parent.sessionId.slice(0, 8) : "?") + " · " + host;
   }
   const who = el("div", "who");
   who.append(el("b", null, title), el("span", null, sub));
@@ -688,17 +931,17 @@ function row(s, now, nested) {
     const cap = el("div", "cap");
     cap.append(...chips);
     if (task) cap.append(el("span", "task", task));
-    if (s.detail) cap.append(el("span", "detail", s.detail));
+    if (s.detail) cap.append(el("span", "detail", srv(s.detail)));
     trk.append(cap);
   }
   const lines = s.state === "ended" ? null : subLines(s, now);
   if (lines) trk.append(lines);
 
-  const st = el("div", "state " + cls, SHORT[cls] || cls);
-  st.title = LABEL[cls] || cls;
+  const st = el("div", "state " + cls, SHORT(cls));
+  st.title = LABEL(cls);
   // Waiting, failed or done: how long it has been like that. Working: when it last reported,
   // which is what tells a busy session from a silent one.
-  st.append(SINCE[cls] ? ageEl("small", since(s), now, "od ") : ageEl("small", s.updatedAt, now, "", " temu"));
+  st.append(SINCE[cls] ? ageEl("small", since(s), now, t("for")) : ageEl("small", s.updatedAt, now, "", t("ago")));
 
   head.append(who, trk, st);
   r.append(head);
@@ -730,14 +973,14 @@ function rowChips(s, now) {
   const subs = s.subagents || [];
   if (subs.length) {
     // Each one has its own line under the row (subLines); the chip only counts them.
-    out.push(el("span", "chip sub", subs.length + " " + plural(subs.length, "podagent", "podagenty", "podagentów")));
+    out.push(el("span", "chip sub", t("nSubagents", subs.length)));
   }
-  if (s.todosTotal) out.push(el("span", "chip", "zadania " + (s.todosDone || 0) + "/" + s.todosTotal));
+  if (s.todosTotal) out.push(el("span", "chip", t("todosChip", s.todosDone || 0, s.todosTotal)));
   // Context window use (from the statusline script): worth a look before auto-compaction.
   if (s.contextPct != null && s.state !== "ended") {
     const pct = Math.round(s.contextPct);
-    const c = el("span", "chip" + (pct >= 85 ? " hot" : pct >= 70 ? " warm" : ""), "kontekst " + pct + "%");
-    c.title = s.contextTokens ? Math.round(s.contextTokens / 1000) + "k z " + Math.round((s.contextLimit || 0) / 1000) + "k tokenów" : "";
+    const c = el("span", "chip" + (pct >= 85 ? " hot" : pct >= 70 ? " warm" : ""), t("contextChip", pct));
+    c.title = s.contextTokens ? t("tokens", Math.round(s.contextTokens / 1000), Math.round((s.contextLimit || 0) / 1000)) : "";
     out.push(c);
   }
   return out;
@@ -753,13 +996,12 @@ function subLines(s, now) {
   for (const a of [...subs].sort((x, y) => x.since.localeCompare(y.since) || x.id.localeCompare(y.id))) {
     const li = el("li");
     const what = el("span", "what");
-    what.append(el("span", "type", a.type || "podagent"));
+    what.append(el("span", "type", a.type || t("subagent")));
     what.append(el("b", null, a.desc || "—"));
-    if (a.doing) what.append(el("span", "doing", a.doing));
+    if (a.doing) what.append(el("span", "doing", srv(a.doing)));
     li.append(what, ageEl("small", a.since, now));
     const quiet = now - Date.parse(a.lastSeen || a.since);
-    li.title = (a.calls ? a.calls + " " + plural(a.calls, "narzędzie", "narzędzia", "narzędzi") + " · " : "") +
-      "ostatnio " + ago(a.lastSeen || a.since, now) + " temu";
+    li.title = (a.calls ? t("nToolCalls", a.calls) + " · " : "") + t("lastSeen", ago(a.lastSeen || a.since, now));
     if (quiet > 3 * MIN) li.className = "quiet";   // no tool call for a while: thinking or stuck
     box.append(li);
   }
@@ -768,7 +1010,8 @@ function subLines(s, now) {
 
 // host: set when the section is one machine, so its name can be changed from the header.
 // longestFirst: order by how long the sessions have been in their state (the waiting lane).
-function section(name, count, list, now, cls, host, longestFirst) {
+// foldKey: names the section for its folded lines, the same in either language.
+function section(name, count, list, now, cls, host, longestFirst, foldKey) {
   const sec = el("section", cls);
   const h = el("h2", "lanes");
   const n = el("span", "name", name);
@@ -777,10 +1020,10 @@ function section(name, count, list, now, cls, host, longestFirst) {
     if (hostNames[host]) n.title = host;
     const m = machines.get(host);
     if (m) n.append(machineState(m, now, "host-state"));
-    const ren = el("button", "rename", "zmień nazwę");
+    const ren = el("button", "rename", t("rename"));
     ren.type = "button";
     ren.dataset.rename = host;
-    ren.setAttribute("aria-label", "Zmień nazwę maszyny " + name);
+    ren.setAttribute("aria-label", t("renameAria", name));
     n.append(ren);
   }
   h.append(n, ticks(), el("span"));
@@ -813,8 +1056,7 @@ function section(name, count, list, now, cls, host, longestFirst) {
     if (gone.length) {
       const id = "kids|" + s.key;
       const open = openOld.has(id);
-      const b = el("button", "older kids", (open ? "▾ " : "▸ ") + "✓ " + gone.length + " " +
-        plural(gone.length, "podagent skończył", "podagenty skończyły", "podagentów skończyło"));
+      const b = el("button", "older kids", (open ? "▾ " : "▸ ") + "✓ " + t("kidsDone", gone.length));
       b.type = "button";
       b.dataset.older = id;
       b.setAttribute("aria-expanded", String(open));
@@ -827,13 +1069,13 @@ function section(name, count, list, now, cls, host, longestFirst) {
   const fold = old.length >= 2 ? old : [];
   for (const s of top) if (!fold.includes(s)) sec.append(...withKids(s));
   if (fold.length) {
-    const id = (cls || "") + "|" + (host ?? name);
+    const id = (cls || "") + "|" + (host ?? foldKey ?? name);
     const open = openOld.has(id);
-    const b = el("button", "older", (open ? "▾ " : "▸ ") + "starsze: " + fold.length);
+    const b = el("button", "older", (open ? "▾ " : "▸ ") + t("older", fold.length));
     b.type = "button";
     b.dataset.older = id;
     b.setAttribute("aria-expanded", String(open));
-    b.append(el("small", null, "gotowe lub zakończone, bez zmian od ponad godziny"));
+    b.append(el("small", null, t("olderNote")));
     sec.append(b);
     if (open) for (const s of fold) sec.append(...withKids(s));
   }
@@ -856,13 +1098,13 @@ function toggleOld(id) {
 // Machines that send a heartbeat (installer adds it), keyed by the name agents report.
 let machines = new Map();
 
-// "● online od 3 h" / "○ offline od 12 min": the dot is the state, the time says since when.
+// "● online od 3 h" / "○ offline od 12 min" ("online for 3 h" in English): the dot is the state, the time says since when.
 function machineState(m, now, cls) {
   const sp = el("span", cls);
   sp.append(el("i", "dot" + (m.online ? "" : " off")));
   sp.append(m.online ? "online " : "offline ");
-  sp.append(ageEl("small", m.online ? m.firstBeat : m.lastBeat, now, "od "));
-  sp.title = (m.online ? "Wysyła sygnał życia" : "Brak sygnału życia od " + clock(m.lastBeat)) + (m.ip ? " · " + m.ip : "");
+  sp.append(ageEl("small", m.online ? m.firstBeat : m.lastBeat, now, t("for")));
+  sp.title = (m.online ? t("heartbeat") : t("noHeartbeat", clock(m.lastBeat))) + (m.ip ? " · " + m.ip : "");
   return sp;
 }
 
@@ -875,7 +1117,7 @@ function renderMachines(now) {
   for (const m of list) {
     const sp = el("span");
     sp.append(el("i", "dot" + (m.online ? "" : " off")), el("span", m.online ? null : "off-name", hostLabel(m.host) + " "));
-    sp.append(m.online ? el("small", null, "online") : ageEl("small", m.lastBeat, now, "offline od "));
+    sp.append(m.online ? el("small", null, "online") : ageEl("small", m.lastBeat, now, t("offlineFor")));
     sp.title = m.ip || "";
     box.append(sp);
   }
@@ -890,7 +1132,7 @@ function render(data) {
   hosts.replaceChildren();
   hosts.style.setProperty("--n", RANGES[range].ms / RANGES[range].step);
   if (data.sessions.length === 0) {
-    hosts.append(el("div", "empty", "Brak sesji"));
+    hosts.append(el("div", "empty", t("noSessions")));
   }
   if (groupBy === "queue") {
     // A subagent sits in its parent's lane, under it, unless it needs you itself.
@@ -903,7 +1145,7 @@ function render(data) {
     };
     for (const lane of LANES) {
       const list = data.sessions.filter(s => laneOf(s) === lane);
-      if (list.length) hosts.append(section(lane.title, String(list.length), list, now, "q-" + lane.id, null, lane.id === "waiting"));
+      if (list.length) hosts.append(section(t("lane." + lane.id), String(list.length), list, now, "q-" + lane.id, null, lane.id === "waiting", lane.id));
     }
   } else {
     const byProject = groupBy === "project";
@@ -914,11 +1156,11 @@ function render(data) {
       groups.get(k).push(s);
     }
     // Alphabetical by shown name, so sections don't jump around on every refresh; "bez projektu" goes last.
-    const label = k => byProject ? k : hostLabel(k);
+    const label = k => byProject ? (k === NO_PROJECT ? t("noProject") : k) : hostLabel(k);
     const order = ([a], [b]) => (a === NO_PROJECT) - (b === NO_PROJECT) || label(a).localeCompare(label(b)) || a.localeCompare(b);
     for (const [key, list] of [...groups].sort(order)) {
-      const active = list.filter(s => s.state !== "ended").length + " aktywne";
-      hosts.append(section(label(key), active, list, now, null, byProject ? null : key));
+      const active = t("active", list.filter(s => s.state !== "ended").length);
+      hosts.append(section(label(key), active, list, now, null, byProject ? null : key, false, key));
     }
   }
   const waiting = data.sessions.filter(s => s.state === "waiting").length;
@@ -926,8 +1168,8 @@ function render(data) {
   const summary = document.getElementById("summary");
   summary.replaceChildren();
   const w = el("b", waiting ? "signal" : null, String(waiting));
-  summary.append(w, " czeka · ", el("b", null, String(working)), " pracuje");
-  document.title = waiting ? `(${waiting}) Agenci` : "Agenci";
+  summary.append(...t("summary", w, el("b", null, String(working))));
+  document.title = waiting ? `(${waiting}) ` + t("agents") : t("agents");
   renderMachines(now);
   alarm(data.sessions);
 }
@@ -945,16 +1187,15 @@ function alarm(sessions) {
   const n = list.length;
   const now = lastData ? new Date(lastData.now).getTime() + (Date.now() - lastFetch) : Date.now();
   b.className = "beacon" + (waiting.length ? "" : " check");
-  const head = el("span", null, n + " " + (waiting.length ? plural(n, "sesja czeka", "sesje czekają", "sesji czeka") + " na Ciebie"
-    : plural(n, "sesja", "sesje", "sesji") + " do sprawdzenia"));
+  const head = el("span", null, t(waiting.length ? "beaconWaiting" : "beaconCheck", n));
   if (waiting.length) {
     const oldest = waiting.map(since).sort()[0];
-    head.append(" · ", ageEl("span", oldest, now, "najdłużej od "));
+    head.append(" · ", ageEl("span", oldest, now, t("longestFor")));
   }
   const names = [...list].sort((a, c) => since(a).localeCompare(since(c)))
-    .map(s => (s.parentKey ? (s.subagentType || "podagent") + " w " : "") + (s.project || s.sessionId.slice(0, 8)) + " (" + hostLabel(s.host) + ")");
+    .map(s => (s.parentKey ? t("subagentIn", s.subagentType || t("subagent")) : "") + (s.project || s.sessionId.slice(0, 8)) + " (" + hostLabel(s.host) + ")");
   b.replaceChildren(head, el("small", null, names.join(" · ")));
-  b.title = "Pokaż kolejkę";
+  b.title = t("showQueue");
 }
 document.getElementById("beacon").addEventListener("click", () => {
   setGroup("queue");
@@ -1005,7 +1246,7 @@ function paint() {
   const s = Math.round(elapsed / 1000);
   const late = document.getElementById("late");
   late.hidden = s < 10 || !document.getElementById("offline").hidden;
-  late.textContent = "Dane sprzed " + s + " s — serwer nie odpowiada";
+  late.textContent = t("late", s);
 }
 
 async function tick() {
@@ -1014,9 +1255,9 @@ async function tick() {
   inFlight = true;
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 5000);
+    const guard = setTimeout(() => ctrl.abort(), 5000);
     const r = await fetch("/api/sessions", { cache: "no-store", signal: ctrl.signal });
-    clearTimeout(t);
+    clearTimeout(guard);
     if (!r.ok) throw new Error(r.status);
     lastData = await r.json();
     lastFetch = Date.now();
@@ -1068,7 +1309,7 @@ hostsRoot.addEventListener("keydown", e => {
 });
 // Browser notifications: a session starts waiting for you, fails, goes silent while working,
 // or finishes its work. Only changes seen while the page is open count; the first load sets the baseline.
-const ALERT = { waiting: "Czeka na Ciebie", error: "Błąd", stale: "Brak sygnału", idle: "Skończył pracę" };
+const ALERT = { waiting: true, error: true, stale: true, idle: true };   // titles: t("alert." + state)
 const canNotify = "Notification" in window && window.isSecureContext;
 let notifyOn = false;
 try { notifyOn = localStorage.getItem("notify") === "1"; } catch {}
@@ -1098,10 +1339,7 @@ function watch(sessions) {
 // Some browser features only work on localhost or over HTTPS. The tablet opens the page by
 // the server's LAN address over plain HTTP, so say how to allow it there.
 function insecureHelp(what) {
-  alert(what + " działa tylko na localhost albo przez HTTPS, a ta strona jest otwarta pod " + location.origin + ".\n\n" +
-    "Aby to włączyć na tym urządzeniu: otwórz edge://flags/#unsafely-treat-insecure-origin-as-secure " +
-    "(w Chrome: chrome://flags/#unsafely-treat-insecure-origin-as-secure), wpisz " + location.origin +
-    ", ustaw Enabled i uruchom przeglądarkę ponownie.");
+  alert(t("insecure", what, location.origin));
 }
 
 // Sound: plays even while you look at the page (the tablet always does), unlike notifications.
@@ -1153,10 +1391,8 @@ function showSound() {
   soundBtn.setAttribute("aria-pressed", String(soundOn && !locked));
   soundBtn.classList.toggle("locked", locked);
   setIcon(soundBtn, soundOn ? "sound" : "sound-off");
-  soundBtn.setAttribute("aria-label", "Dźwięk");
-  soundBtn.title = locked ? "Dźwięk wstrzymany przez przeglądarkę: dotknij strony, aby go włączyć"
-    : soundOn ? "Sygnał dźwiękowy, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę. Kliknij, aby wyłączyć"
-    : "Włącz sygnał dźwiękowy, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę";
+  soundBtn.setAttribute("aria-label", t("sound"));
+  soundBtn.title = t(locked ? "soundLocked" : soundOn ? "soundOn" : "soundOff");
 }
 soundBtn.hidden = !AudioCtx;
 soundBtn.addEventListener("click", async () => {
@@ -1197,12 +1433,10 @@ async function holdAwake() {
 }
 function showAwake() {
   awakeBtn.setAttribute("aria-pressed", String(wakeOn && !!wakeLock));
-  awakeBtn.title = !canWake ? "Przeglądarka pozwala blokować wygaszanie ekranu tylko na localhost albo przez HTTPS"
-    : wakeOn ? "Ekran nie wygasa, dopóki ta strona jest widoczna. Kliknij, aby wyłączyć"
-    : "Nie wygaszaj ekranu, dopóki ta strona jest widoczna";
+  awakeBtn.title = t(!canWake ? "awakeNo" : wakeOn ? "awakeOn" : "awakeOff");
 }
 awakeBtn.addEventListener("click", async () => {
-  if (!canWake) { insecureHelp("Blokada wygaszania ekranu"); return; }
+  if (!canWake) { insecureHelp(t("awakeWhat")); return; }
   wakeOn = !wakeOn;
   try { localStorage.setItem("awake", wakeOn ? "1" : "0"); } catch {}
   if (wakeOn) await holdAwake();
@@ -1228,11 +1462,11 @@ function alertFor(s, st) {
   // You are looking at the page already.
   if (document.hasFocus() && !document.hidden) return;
   const name = s.project || s.sessionId.slice(0, 8);
-  const text = st === "idle" ? s.lastMessage || s.detail : s.detail || s.task || s.lastMessage;
+  const text = st === "idle" ? s.lastMessage || srv(s.detail) : srv(s.detail) || s.task || s.lastMessage;
   // Same tag for the same moment, so several open tabs show one notification, not one each.
   const tl = s.timeline && s.timeline.length ? s.timeline[s.timeline.length - 1].at : s.updatedAt;
   try {
-    const n = new Notification(ALERT[st] + " · " + name, {
+    const n = new Notification(t("alert." + st) + " · " + name, {
       body: hostLabel(s.host) + " · " + (AGENT[s.agent] || s.agent) + (text ? "\n" + text.slice(0, 240) : ""),
       tag: s.key + "|" + st + "|" + (st === "stale" ? s.updatedAt : tl),
       requireInteraction: st !== "idle",
@@ -1251,20 +1485,18 @@ const notifyBtn = document.getElementById("notify");
 function showNotify() {
   const granted = canNotify && Notification.permission === "granted";
   notifyBtn.setAttribute("aria-pressed", String(notifyOn && granted));
-  notifyBtn.title = !canNotify ? "Przeglądarka pozwala na powiadomienia tylko na localhost albo przez HTTPS"
-    : Notification.permission === "denied" ? "Powiadomienia są zablokowane dla tej strony w ustawieniach przeglądarki"
-    : notifyOn && granted ? "Powiadamiam, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę. Kliknij, aby wyłączyć"
-    : "Włącz powiadomienia, gdy sesja czeka na Ciebie, ma błąd, traci sygnał albo kończy pracę";
+  notifyBtn.title = t(!canNotify ? "notifyNo" : Notification.permission === "denied" ? "notifyDenied"
+    : notifyOn && granted ? "notifyOn" : "notifyOff");
 }
 notifyBtn.addEventListener("click", async () => {
-  if (!canNotify) { insecureHelp("Powiadomienia"); return; }
+  if (!canNotify) { insecureHelp(t("notifyWhat")); return; }
   if (notifyOn && Notification.permission === "granted") {
     notifyOn = false;
   } else {
     const p = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
-    if (p !== "granted") { showNotify(); alert("Powiadomienia są zablokowane dla tej strony. Odblokuj je w ustawieniach witryny (ikona obok adresu)."); return; }
+    if (p !== "granted") { showNotify(); alert(t("notifyBlocked")); return; }
     notifyOn = true;
-    try { new Notification("Powiadomienia włączone", { body: "Dam znać, gdy agent będzie Cię potrzebował albo skończy pracę.", tag: "agent-status-on" }); } catch {}
+    try { new Notification(t("notifyHello"), { body: t("notifyHelloBody"), tag: "agent-status-on" }); } catch {}
   }
   try { localStorage.setItem("notify", notifyOn ? "1" : "0"); } catch {}
   showNotify();
